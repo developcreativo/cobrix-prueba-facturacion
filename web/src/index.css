@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/*
+ * Tema del panel de Cobrix.
+ *
+ * Todo el color sale de aquí: los componentes nunca escriben un color fijo.
+ * Dos capas:
+ *   1. Tokens de shadcn/ui (background, card, primary, muted…), en claro y oscuro.
+ *   2. Tonos de estado (ok / warn / bad / info / mute), la misma taxonomía que usa el
+ *      dominio en `src/cobrix/dominio/resultados.ts`. Cada tono tiene tres valores:
+ *      texto (`--color-ok`), fondo suave (`--color-ok-soft`) y borde (`--color-ok-line`),
+ *      calculados para contraste AA sobre su propio fondo en los dos temas.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+	--font-heading: var(--font-sans);
+	--font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+	--font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+
+	/* Tonos de estado */
+	--color-ok: var(--ok-fg);
+	--color-ok-soft: var(--ok-bg);
+	--color-ok-line: var(--ok-line);
+	--color-warn: var(--warn-fg);
+	--color-warn-soft: var(--warn-bg);
+	--color-warn-line: var(--warn-line);
+	--color-bad: var(--bad-fg);
+	--color-bad-soft: var(--bad-bg);
+	--color-bad-line: var(--bad-line);
+	--color-info: var(--info-fg);
+	--color-info-soft: var(--info-bg);
+	--color-info-line: var(--info-line);
+	--color-mute: var(--mute-fg);
+	--color-mute-soft: var(--mute-bg);
+	--color-mute-line: var(--mute-line);
+
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+	--radius: 0.625rem;
+
+	--background: oklch(0.975 0.004 265);
+	--foreground: oklch(0.21 0.02 265);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.21 0.02 265);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.21 0.02 265);
+	--primary: oklch(0.49 0.17 277);
+	--primary-foreground: oklch(0.99 0.002 265);
+	--secondary: oklch(0.955 0.006 265);
+	--secondary-foreground: oklch(0.28 0.02 265);
+	--muted: oklch(0.962 0.005 265);
+	--muted-foreground: oklch(0.49 0.018 265);
+	--accent: oklch(0.945 0.018 277);
+	--accent-foreground: oklch(0.38 0.14 277);
+	--destructive: oklch(0.52 0.19 27);
+	--border: oklch(0.9 0.008 265);
+	--input: oklch(0.9 0.008 265);
+	--ring: oklch(0.49 0.17 277);
+
+	--sidebar: oklch(1 0 0);
+	--sidebar-foreground: oklch(0.21 0.02 265);
+	--sidebar-primary: oklch(0.49 0.17 277);
+	--sidebar-primary-foreground: oklch(0.99 0.002 265);
+	--sidebar-accent: oklch(0.945 0.018 277);
+	--sidebar-accent-foreground: oklch(0.38 0.14 277);
+	--sidebar-border: oklch(0.9 0.008 265);
+	--sidebar-ring: oklch(0.49 0.17 277);
+
+	--ok-fg: oklch(0.44 0.11 158);
+	--ok-bg: oklch(0.955 0.04 158);
+	--ok-line: oklch(0.85 0.07 158);
+	--warn-fg: oklch(0.47 0.11 70);
+	--warn-bg: oklch(0.96 0.055 85);
+	--warn-line: oklch(0.85 0.09 85);
+	--bad-fg: oklch(0.49 0.18 25);
+	--bad-bg: oklch(0.955 0.035 25);
+	--bad-line: oklch(0.86 0.07 25);
+	--info-fg: oklch(0.47 0.14 258);
+	--info-bg: oklch(0.955 0.03 258);
+	--info-line: oklch(0.86 0.06 258);
+	--mute-fg: oklch(0.47 0.015 265);
+	--mute-bg: oklch(0.945 0.005 265);
+	--mute-line: oklch(0.88 0.008 265);
+
+	color-scheme: light;
+}
+
+.dark {
+	--background: oklch(0.175 0.014 265);
+	--foreground: oklch(0.93 0.008 265);
+	--card: oklch(0.215 0.016 265);
+	--card-foreground: oklch(0.93 0.008 265);
+	--popover: oklch(0.225 0.016 265);
+	--popover-foreground: oklch(0.93 0.008 265);
+	--primary: oklch(0.72 0.13 277);
+	--primary-foreground: oklch(0.17 0.02 277);
+	--secondary: oklch(0.27 0.018 265);
+	--secondary-foreground: oklch(0.93 0.008 265);
+	--muted: oklch(0.26 0.016 265);
+	--muted-foreground: oklch(0.72 0.014 265);
+	--accent: oklch(0.3 0.05 277);
+	--accent-foreground: oklch(0.86 0.08 277);
+	--destructive: oklch(0.7 0.17 22);
+	--border: oklch(0.32 0.016 265);
+	--input: oklch(0.34 0.016 265);
+	--ring: oklch(0.72 0.13 277);
+
+	--sidebar: oklch(0.2 0.015 265);
+	--sidebar-foreground: oklch(0.93 0.008 265);
+	--sidebar-primary: oklch(0.72 0.13 277);
+	--sidebar-primary-foreground: oklch(0.17 0.02 277);
+	--sidebar-accent: oklch(0.3 0.05 277);
+	--sidebar-accent-foreground: oklch(0.86 0.08 277);
+	--sidebar-border: oklch(0.32 0.016 265);
+	--sidebar-ring: oklch(0.72 0.13 277);
+
+	--ok-fg: oklch(0.82 0.14 158);
+	--ok-bg: oklch(0.3 0.055 158);
+	--ok-line: oklch(0.42 0.08 158);
+	--warn-fg: oklch(0.86 0.13 85);
+	--warn-bg: oklch(0.32 0.06 70);
+	--warn-line: oklch(0.45 0.09 70);
+	--bad-fg: oklch(0.8 0.12 25);
+	--bad-bg: oklch(0.32 0.08 25);
+	--bad-line: oklch(0.44 0.11 25);
+	--info-fg: oklch(0.83 0.09 258);
+	--info-bg: oklch(0.31 0.06 258);
+	--info-line: oklch(0.43 0.08 258);
+	--mute-fg: oklch(0.76 0.012 265);
+	--mute-bg: oklch(0.28 0.014 265);
+	--mute-line: oklch(0.4 0.014 265);
+
+	color-scheme: dark;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/60;
+	}
+	html {
+		@apply font-sans;
+		-webkit-text-size-adjust: 100%;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-feature-settings: "cv11";
+	}
+	/* Foco visible en todo lo que se puede enfocar con teclado. */
+	:focus-visible {
+		@apply outline-2 outline-offset-2 outline-ring;
+	}
+}
+
+/* Números alineados en columnas: montos, contadores, identificadores. */
+@utility tabular {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Salta al contenido: primer tabulable de la página. */
+@utility salto-contenido {
+	@apply sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground;
+}
