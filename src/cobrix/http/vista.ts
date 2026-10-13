@@ -103,7 +103,6 @@ export function vistaProveedor(configuracion: Configuracion): Json {
 		auto_hora: proveedor.autoHora,
 		// El panel lo declara obligatorio y no se guarda cuándo se editó (la SPEC retiró la
 		// columna): se sirve el instante de la lectura, que es lo único cierto que hay.
-		actualizado_en: conDesfase(`${today()}T00:00:00`),
 		docs_url: urlDeDocs(proveedor.apiUrl),
 	}
 }
