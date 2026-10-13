@@ -345,7 +345,11 @@ Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impi
 | `GET` | `/api/clientes/:id` | expediente completo |
 | `GET` | `/api/salud` | versión, fecha del sandbox, estado de la base y del proveedor |
 
-Errores siempre con la misma forma: `{ error: { codigo, mensaje, detalle?, endpoint? } }`, con `codigo` estable para que la UI sepa qué sugerir.
+Errores siempre con la misma forma: `{ error: { codigo, mensaje, endpoint, status, sugerencia } }`, con `codigo` estable.
+
+> **Corregido el 2026-10-13, al implementar.** Esta línea decía `{ codigo, mensaje, detalle?, endpoint? }` y dejaba que la UI eligiera la sugerencia a partir del `codigo`. El código real (`ErrorApi` en `src/cobrix/api/cliente.ts` y `ErrorCorrida` en `src/cobrix/almacen/corridas.ts`) ya redacta la **`sugerencia`** —«Revisa el usuario y la contraseña en Configuración → Proveedor»— y conserva el `status` HTTP. Que el panel reimplantara esa redacción habría puesto el «cómo seguir» del §3.7 en dos sitios, condenados a divergir. Manda el código: el panel muestra la sugerencia del backend tal cual. No revertir.
+
+Los instantes viajan en ISO **con desfase explícito** (`2026-10-13T14:03:11-04:00`). El almacén guarda hora civil de Caracas sin zona, y es la capa HTTP la que añade el desfase: enviarla cruda desplazaría el historial varias horas según la máquina que lo mire.
 
 ### 3.9 Plan de pruebas
 
