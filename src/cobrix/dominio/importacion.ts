@@ -32,6 +32,14 @@
  * cuotas no hay con qué comparar. Omitirla es seguro porque refrescar no inserta: lo único que
  * puede pasar es poner al día un contrato que Cobrix ya tenía.
  *
+ * EL TITULAR VIAJA EN CADA LÍNEA. `titularNombre` y `titularIdentificacion` no son una regla: son
+ * el acta de lo que el administrador dijo. Las líneas de contratos que NO se importan no tienen
+ * cliente en Cobrix, así que sin ellos el detalle de la corrida mostraría «900122 · 7000112 ·
+ * Excluida por estado», que a un cobrador no le dice nada. Se rellenan con la identificación
+ * normalizada cuando normaliza y con la cruda cuando no (que es justo lo que hay que mostrar en
+ * `identificacion_invalida`), y son `null` solo si la respuesta fue ilegible: ahí no sabemos de
+ * quién hablamos. Normalizar para mostrar no cambia ninguna clasificación.
+ *
  * Y EL LÍMITE DURO: refrescar ACTUALIZA, NUNCA INSERTA. Quien consuma `frescos` solo puede tocar
  * clientes y contratos que Cobrix ya tiene. Si pudiera crear, cualquier titular cuyas cuotas
  * queden todas fuera (por ventana, por máximo de recientes o porque ya están importadas)
@@ -78,6 +86,9 @@ export interface ContextoImportacion {
 export interface LineaImportacion {
 	readonly contratoId: number
 	readonly deudaId: string | null
+	/** Acta de lo que el ISP dijo del titular; `null` si la respuesta fue ilegible. */
+	readonly titularNombre: string | null
+	readonly titularIdentificacion: string | null
 	readonly periodo: string | null
 	readonly monto: Centavos
 	readonly resultado: ResultadoImportacion
@@ -89,6 +100,8 @@ export interface LineaImportacion {
 
 export interface DatosCliente {
 	readonly id: string
+	/** Tal como la publica el administrador: `V-12345678`. Se muestra como «documento». */
+	readonly identificacionBruta: string
 	readonly tipoDocumento: TipoDocumento | null
 	readonly numero: string
 	readonly nombre: string
@@ -146,6 +159,7 @@ export function clasificarContrato(
 	if (!lectura.ok) {
 		return soloLineas([{
 			contratoId, deudaId: null, periodo: null, monto: 0, cuotas: 0,
+			titularNombre: null, titularIdentificacion: null,
 			resultado: 'respuesta_contradictoria',
 			motivo: `La API se contradice: ${lectura.detalle}. El contrato queda fuera.`,
 			traza: [pasoDescarta('lectura de la respuesta', lectura.detalle)],
@@ -155,12 +169,14 @@ export function clasificarContrato(
 	const filas = lectura.datos
 	if (filas.length === 0) return { lineas: [], candidatas: [], frescos: null }
 	const base = filas[0]!
+	const acta = actaDelTitular(base)
 
 	// 1. La fila con deuda_id "0" no es una cuota: el contrato no debe nada.
 	const sinDeuda = filas.filter(fila => fila.deudaId === '0')
 	const cuotas = filas.filter(fila => fila.deudaId !== '0')
 	const lineasSinDeuda: LineaImportacion[] = sinDeuda.map(() => ({
 		contratoId, deudaId: null, periodo: null, monto: 0, cuotas: 0,
+		...acta,
 		resultado: 'sin_deuda',
 		motivo: 'El administrador responde con la fila «deuda_id 0»: el contrato no debe nada.',
 		traza: [pasoDescarta('fila deuda_id "0"', 'no es una cuota, es la señal de «sin deuda»')],
@@ -186,6 +202,7 @@ export function clasificarContrato(
 			periodo: periodoDeEtiqueta(fila.detalleDeuda[0]),
 			monto: fila.deuda,
 			cuotas: 1,
+			...acta,
 			resultado: 'excluida_estado' as const,
 			motivo: `Contrato ${base.estado}: ${detalle}.`,
 			traza: [...traza, pasoDescarta('estado del contrato', detalle)],
@@ -219,6 +236,7 @@ export function clasificarContrato(
 			periodo: periodoDeEtiqueta(fila.detalleDeuda[0]),
 			monto: fila.deuda,
 			cuotas: 1,
+			...acta,
 			resultado: 'saldo_residual' as const,
 			motivo: 'Saldo residual de menos de un centavo: no se importa.',
 			traza: [
@@ -257,7 +275,7 @@ export function clasificarContrato(
 	for (const { fila, vencimiento } of leidas) {
 		if (vencimiento === null) {
 			lineas.push({
-				contratoId, deudaId: fila.deudaId, periodo: null, monto: fila.deuda, cuotas: 1,
+				contratoId, deudaId: fila.deudaId, periodo: null, monto: fila.deuda, cuotas: 1, ...acta,
 				resultado: 'periodo_invalido',
 				motivo: `No se pudo leer el periodo de «${fila.detalleDeuda.join(' · ') || '(vacío)'}».`,
 				traza: [...traza, pasoDescarta('periodo de la cuota', 'detalle_deuda no dice un periodo legible')],
@@ -283,7 +301,7 @@ export function clasificarContrato(
 
 		if (contexto.yaImportadas.has(fila.deudaId)) {
 			lineas.push({
-				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1,
+				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1, ...acta,
 				resultado: 'ya_importada',
 				motivo: 'La cuota ya tiene su factura en Cobrix: no se duplica.',
 				traza: [...trazaCuota,
@@ -295,7 +313,7 @@ export function clasificarContrato(
 
 		if (desde !== null && periodo < desde) {
 			lineas.push({
-				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1,
+				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1, ...acta,
 				resultado: 'fuera_de_ventana',
 				motivo: `Periodo ${periodo}, anterior a la ventana de ${cfg.ventanaMeses} meses (desde ${desde}).`,
 				traza: [...trazaCuota, pasoDescarta('ventana de importación', `${periodo} < ${desde}`)],
@@ -305,7 +323,7 @@ export function clasificarContrato(
 
 		if (!recientes.has(fila.deudaId)) {
 			lineas.push({
-				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1,
+				contratoId, deudaId: fila.deudaId, periodo, monto: fila.deuda, cuotas: 1, ...acta,
 				resultado: 'limite_recientes',
 				motivo: `Solo se conservan las ${cfg.maxCuotasRecientes} cuotas más recientes del contrato.`,
 				traza: [...trazaCuota, pasoDescarta('máximo de cuotas recientes',
@@ -360,6 +378,7 @@ export function aplicarTopes(
 		frenadas.push({
 			contratoId: candidata.contratoId, deudaId: candidata.deudaId, periodo: candidata.periodo,
 			monto: candidata.monto, cuotas: 1,
+			titularNombre: candidata.cliente.nombre, titularIdentificacion: candidata.cliente.id,
 			resultado: tope,
 			motivo: tope === 'tope_facturas'
 				? `La corrida alcanzó el tope de ${cfg.topeFacturas} facturas nuevas: queda frenada, no se importa.`
@@ -398,15 +417,29 @@ function lineaDeContrato(
 	const monto = afectadas.reduce((total, fila) => total + fila.deuda, 0)
 	return {
 		contratoId, deudaId: null, periodo: null, monto, cuotas: afectadas.length,
+		...actaDelTitular(afectadas[0]),
 		resultado,
 		motivo: `${motivo} Quedan fuera ${afectadas.length} cuota(s) por ${usd(monto)}.`,
 		traza,
 	}
 }
 
+/**
+ * Quién es el titular, para el acta de la corrida. Solo se usa para explicar: la identificación
+ * se normaliza si puede y se deja cruda si no, y ninguna decisión depende de esto.
+ */
+function actaDelTitular(fila: FilaContrato | undefined): { titularNombre: string | null; titularIdentificacion: string | null } {
+	if (fila === undefined) return { titularNombre: null, titularIdentificacion: null }
+	return {
+		titularNombre: fila.nombre,
+		titularIdentificacion: normalizarIdentificacion(fila.identificacionBruta)?.id ?? fila.identificacionBruta,
+	}
+}
+
 function datosCliente(fila: FilaContrato, identificacion: Identificacion): DatosCliente {
 	return {
 		id: identificacion.id,
+		identificacionBruta: fila.identificacionBruta,
 		tipoDocumento: identificacion.tipo,
 		numero: identificacion.numero,
 		nombre: fila.nombre,

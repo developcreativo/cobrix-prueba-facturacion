@@ -8,6 +8,8 @@
  * Decisiones que vienen de las rarezas documentadas (docs/API.md):
  *  - El token dura 2 h y no hay refresh: se guarda con su vencimiento y se renueva antes de
  *    que caduque. Un 401 dispara UN re-login y un reintento; el segundo 401 falla la corrida.
+ *  - El login en vuelo se COMPARTE: si cuatro peticiones concurrentes arrancan sin token, hacen
+ *    un solo login y esperan el mismo, en vez de iniciar sesión cuatro veces.
  *  - `lista_ids_contratos` devuelve solo los activos si se envía `estado` con cualquier valor:
  *    este cliente nunca envía ese parámetro.
  *  - `pago_informacion` sin fechas responde una ventana fija: siempre se envían explícitas.
@@ -88,6 +90,7 @@ export function crearCliente(credenciales: CredencialesProveedor, opciones: Opci
 	const base = credenciales.apiUrl.replace(/\/+$/, '')
 
 	let token: { valor: string; expiraEn: number } | null = null
+	let loginEnVuelo: Promise<string> | null = null
 	let usuario = credenciales.usuario
 	let logins = 0
 	let peticiones = 0
@@ -146,8 +149,19 @@ export function crearCliente(credenciales: CredencialesProveedor, opciones: Opci
 		return payload
 	}
 
+	/**
+	 * El token, iniciando sesión si hace falta. Varias llamadas concurrentes sin token comparten
+	 * el mismo login: la corrida de pagadas arranca con cuatro obreros a la vez y haría cuatro.
+	 */
 	async function obtenerToken(): Promise<string> {
 		if (token !== null && token.expiraEn - MARGEN_TOKEN_MS > ahora()) return token.valor
+		loginEnVuelo ??= iniciarSesion().finally(() => {
+			loginEnVuelo = null
+		})
+		return await loginEnVuelo
+	}
+
+	async function iniciarSesion(): Promise<string> {
 		const endpoint = 'usuario/login'
 		const respuesta = await conReintentos(ruta(endpoint), {
 			method: 'POST',

@@ -75,6 +75,9 @@ export interface ErrorCorrida {
 
 export interface LineaCorridaEntrada {
 	readonly contratoId: number | null
+	/** Quién era el titular según el administrador, aunque no sea cliente de Cobrix. */
+	readonly titularNombre?: string | null
+	readonly titularIdentificacion?: string | null
 	readonly deudaId: string | null
 	readonly periodo: string | null
 	readonly monto: Centavos
@@ -88,6 +91,8 @@ export interface LineaCorridaEntrada {
 export interface LineaGuardada extends LineaCorridaEntrada {
 	readonly id: number
 	readonly facturaId: number | null
+	readonly titularNombre: string | null
+	readonly titularIdentificacion: string | null
 }
 
 export interface CorridaGuardada {
@@ -197,12 +202,13 @@ export function guardarLineas(almacen: Almacen, corridaId: number, lineas: reado
 	}
 
 	const sentencia = almacen.db.prepare(`
-		INSERT INTO corrida_linea (corrida_id, contrato_id, deuda_id, periodo, monto, cuotas, resultado, motivo, traza, factura_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO corrida_linea (corrida_id, contrato_id, titular_nombre, titular_identificacion,
+			deuda_id, periodo, monto, cuotas, resultado, motivo, traza, factura_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	for (const linea of lineas) {
 		sentencia.run(
-			corridaId, linea.contratoId, linea.deudaId, linea.periodo,
-			Math.trunc(linea.monto), Math.trunc(linea.cuotas),
+			corridaId, linea.contratoId, linea.titularNombre ?? null, linea.titularIdentificacion ?? null,
+			linea.deudaId, linea.periodo, Math.trunc(linea.monto), Math.trunc(linea.cuotas),
 			linea.resultado, linea.motivo, JSON.stringify(linea.traza), linea.facturaId ?? null,
 		)
 	}
@@ -226,6 +232,34 @@ export function listarCorridas(almacen: Almacen, filtro: FiltroHistorial = {}): 
 		: almacen.db.prepare('SELECT * FROM corrida WHERE tipo = ? ORDER BY id DESC LIMIT ? OFFSET ?')
 			.all(filtro.tipo, limite, desplazamiento)) as Array<Record<string, unknown>>
 	return filas.map(comoCorrida)
+}
+
+export interface FiltroUltima {
+	readonly tipo?: TipoCorrida
+	readonly estado?: EstadoCorrida
+	readonly disparo?: DisparoCorrida
+}
+
+/** La corrida más reciente que cumpla el filtro: la usa el Resumen del panel. */
+export function ultimaCorrida(almacen: Almacen, filtro: FiltroUltima = {}): CorridaGuardada | null {
+	const condiciones: string[] = []
+	const parametros: string[] = []
+	if (filtro.tipo !== undefined) {
+		condiciones.push('tipo = ?')
+		parametros.push(filtro.tipo)
+	}
+	if (filtro.estado !== undefined) {
+		condiciones.push('estado = ?')
+		parametros.push(filtro.estado)
+	}
+	if (filtro.disparo !== undefined) {
+		condiciones.push('disparo = ?')
+		parametros.push(filtro.disparo)
+	}
+	const donde = condiciones.length === 0 ? '' : `WHERE ${condiciones.join(' AND ')}`
+	const fila = almacen.db.prepare(`SELECT * FROM corrida ${donde} ORDER BY id DESC LIMIT 1`)
+		.get(...parametros) as Record<string, unknown> | undefined
+	return fila === undefined ? null : comoCorrida(fila)
 }
 
 export function contarCorridas(almacen: Almacen): number {
@@ -263,6 +297,8 @@ function comoLinea(fila: Record<string, unknown>): LineaGuardada {
 	return {
 		id: comoEntero(fila.id),
 		contratoId: comoEnteroONulo(fila.contrato_id),
+		titularNombre: comoTextoONulo(fila.titular_nombre),
+		titularIdentificacion: comoTextoONulo(fila.titular_identificacion),
 		deudaId: comoTextoONulo(fila.deuda_id),
 		periodo: comoTextoONulo(fila.periodo),
 		monto: comoEntero(fila.monto),

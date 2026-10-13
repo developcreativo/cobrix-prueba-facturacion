@@ -10,8 +10,9 @@
  * (`enTransaccion`), y abrir otra dentro haría fallar a SQLite.
  */
 
+import { normalizarIdentificacion } from '../dominio/identificacion.ts'
 import type { DatosCliente, DatosContrato } from '../dominio/importacion.ts'
-import { comoEntero, type Almacen } from './base.ts'
+import { comoEntero, comoTexto, comoTextoONulo, type Almacen } from './base.ts'
 
 /** La escritura se rechaza entera: nunca se guarda un cliente a medias. */
 export class DatosInvalidos extends Error {
@@ -81,10 +82,11 @@ export function guardarCliente(
 	if (refrescarCliente(almacen, cliente, momento)) return { creado: false }
 
 	almacen.db.prepare(`
-		INSERT INTO cliente (id, tipo_documento, numero, nombre, persona, email, telefono, origen, creado_en, visto_en)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-		cliente.id, cliente.tipoDocumento, cliente.numero, cliente.nombre, cliente.persona,
-		cliente.email, cliente.telefono, origen, momento, momento,
+		INSERT INTO cliente (id, tipo_documento, numero, nombre, identificacion_bruta, persona, email, telefono,
+			origen, creado_en, visto_en)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+		cliente.id, cliente.tipoDocumento, cliente.numero, cliente.nombre, cliente.identificacionBruta,
+		cliente.persona, cliente.email, cliente.telefono, origen, momento, momento,
 	)
 	return { creado: true }
 }
@@ -98,9 +100,10 @@ export function guardarCliente(
 export function refrescarCliente(almacen: Almacen, cliente: DatosCliente, momento: string): boolean {
 	exigir(problemasDelCliente(cliente, momento))
 	const resultado = almacen.db.prepare(`
-		UPDATE cliente SET tipo_documento = ?, numero = ?, nombre = ?, persona = ?, email = ?, telefono = ?, visto_en = ?
+		UPDATE cliente SET tipo_documento = ?, numero = ?, nombre = ?, identificacion_bruta = ?, persona = ?,
+			email = ?, telefono = ?, visto_en = ?
 		WHERE id = ?`).run(
-		cliente.tipoDocumento, cliente.numero, cliente.nombre, cliente.persona,
+		cliente.tipoDocumento, cliente.numero, cliente.nombre, cliente.identificacionBruta, cliente.persona,
 		cliente.email, cliente.telefono, momento, cliente.id,
 	)
 	return comoEntero(resultado.changes) > 0
@@ -186,3 +189,171 @@ export function contarClientes(almacen: Almacen): number {
 	const fila = almacen.db.prepare('SELECT COUNT(*) AS total FROM cliente').get() as Record<string, unknown>
 	return comoEntero(fila.total)
 }
+
+// ------------------------------------------------- consultas para el panel
+
+export interface FilaDeClientes {
+	readonly id: string
+	readonly nombre: string
+	/** El documento tal como lo publica el administrador. */
+	readonly documento: string
+	readonly persona: string
+	readonly contratos: number
+	readonly abiertas: number
+	readonly pagadas: number
+	readonly deuda: number
+	readonly venceMasAntigua: string | null
+}
+
+export interface BusquedaDeClientes {
+	readonly q?: string
+	readonly limite?: number
+	readonly desplazamiento?: number
+	readonly orden?: 'nombre' | 'deuda' | 'vencimiento'
+}
+
+/**
+ * La tabla de clientes de ENUNCIADO.md §3.5 con sus agregados, en UNA consulta: así el total de
+ * la pantalla de clientes no puede discrepar del Resumen.
+ *
+ * La búsqueda entiende las tres formas con las que un cobrador escribe lo mismo: el nombre
+ * (parcial), el documento con formato (`V-9876543`) y el número suelto (`9876543`, `09000123`).
+ * El término se normaliza con la misma regla del dominio, así que `09000123` encuentra a
+ * `9000123`. Los acentos se quitan del término buscado (SQLite no sabe quitarlos del dato).
+ */
+export function tablaDeClientes(almacen: Almacen, busqueda: BusquedaDeClientes = {}): {
+	readonly total: number
+	readonly clientes: readonly FilaDeClientes[]
+} {
+	const limite = Math.min(Math.max(busqueda.limite ?? 200, 1), 1_000)
+	const desplazamiento = Math.max(busqueda.desplazamiento ?? 0, 0)
+	const q = (busqueda.q ?? '').trim()
+
+	const filtro = q === '' ? '1 = 1' : `(
+		LOWER(c.nombre) LIKE '%' || ? || '%'
+		OR c.id = ?
+		OR c.numero = ?
+		OR UPPER(REPLACE(REPLACE(REPLACE(c.identificacion_bruta, '-', ''), '.', ''), ' ', '')) LIKE '%' || ? || '%'
+	)`
+	const sinAcentos = q.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+	const identificacion = normalizarIdentificacion(q)
+	const limpio = sinAcentos.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+	const parametros: Array<string | number> = q === ''
+		? []
+		: [sinAcentos.toLowerCase(), identificacion?.id ?? limpio, identificacion?.numero ?? limpio, limpio]
+
+	const orden = busqueda.orden === 'deuda'
+		? 'deuda DESC, c.nombre'
+		: busqueda.orden === 'vencimiento'
+			? 'vence_mas_antigua IS NULL, vence_mas_antigua, c.nombre'
+			: 'c.nombre'
+
+	const filas = almacen.db.prepare(`
+		SELECT c.id, c.nombre, c.identificacion_bruta, c.persona,
+			(SELECT COUNT(*) FROM contrato t WHERE t.cliente_id = c.id) AS contratos,
+			COUNT(CASE WHEN f.estado = 'abierta' THEN 1 END) AS abiertas,
+			COUNT(CASE WHEN f.estado = 'pagada' THEN 1 END) AS pagadas,
+			COALESCE(SUM(CASE WHEN f.estado = 'abierta' THEN f.saldo END), 0) AS deuda,
+			MIN(CASE WHEN f.estado = 'abierta' THEN f.vence_el END) AS vence_mas_antigua
+		FROM cliente c LEFT JOIN factura f ON f.cliente_id = c.id
+		WHERE ${filtro}
+		GROUP BY c.id
+		ORDER BY ${orden}
+		LIMIT ? OFFSET ?`).all(...parametros, limite, desplazamiento) as Array<Record<string, unknown>>
+
+	const total = comoEntero((almacen.db.prepare(`SELECT COUNT(*) AS n FROM cliente c WHERE ${filtro}`)
+		.get(...parametros) as Record<string, unknown>).n)
+
+	return { total, clientes: filas.map(comoFilaDeClientes) }
+}
+
+function comoFilaDeClientes(fila: Record<string, unknown>): FilaDeClientes {
+	const id = comoTexto(fila.id)
+	return {
+		id,
+		nombre: comoTexto(fila.nombre),
+		// Una base migrada puede no tener la cruda: se cae a la clave, que siempre está.
+		documento: comoTextoONulo(fila.identificacion_bruta) ?? id,
+		persona: comoTexto(fila.persona, 'natural'),
+		contratos: comoEntero(fila.contratos),
+		abiertas: comoEntero(fila.abiertas),
+		pagadas: comoEntero(fila.pagadas),
+		deuda: comoEntero(fila.deuda),
+		venceMasAntigua: comoTextoONulo(fila.vence_mas_antigua),
+	}
+}
+
+export interface ClienteGuardado extends FilaDeClientes {
+	readonly email: string | null
+	readonly telefono: string | null
+	readonly origen: string
+	readonly creadoEn: string
+}
+
+export function leerCliente(almacen: Almacen, id: string): ClienteGuardado | null {
+	const fila = almacen.db.prepare(`
+		SELECT c.*,
+			(SELECT COUNT(*) FROM contrato t WHERE t.cliente_id = c.id) AS contratos,
+			(SELECT COUNT(*) FROM factura f WHERE f.cliente_id = c.id AND f.estado = 'abierta') AS abiertas,
+			(SELECT COUNT(*) FROM factura f WHERE f.cliente_id = c.id AND f.estado = 'pagada') AS pagadas,
+			(SELECT COALESCE(SUM(f.saldo), 0) FROM factura f WHERE f.cliente_id = c.id AND f.estado = 'abierta') AS deuda,
+			(SELECT MIN(f.vence_el) FROM factura f WHERE f.cliente_id = c.id AND f.estado = 'abierta') AS vence_mas_antigua
+		FROM cliente c WHERE c.id = ?`).get(id) as Record<string, unknown> | undefined
+	if (fila === undefined) return null
+	return {
+		...comoFilaDeClientes(fila),
+		email: comoTextoONulo(fila.email),
+		telefono: comoTextoONulo(fila.telefono),
+		origen: comoTexto(fila.origen),
+		creadoEn: comoTexto(fila.creado_en),
+	}
+}
+
+export interface ContratoGuardado {
+	readonly id: number
+	readonly estado: string
+	readonly plan: string
+	readonly precio: number
+	readonly moneda: string
+	readonly sucursal: string
+	readonly codigo: string
+}
+
+export function contratosDeCliente(almacen: Almacen, clienteId: string): readonly ContratoGuardado[] {
+	const filas = almacen.db.prepare('SELECT * FROM contrato WHERE cliente_id = ? ORDER BY id')
+		.all(clienteId) as Array<Record<string, unknown>>
+	return filas.map(fila => ({
+		id: comoEntero(fila.id),
+		estado: comoTexto(fila.estado),
+		plan: comoTexto(fila.plan),
+		precio: comoEntero(fila.precio),
+		moneda: comoTexto(fila.moneda, 'USD'),
+		sucursal: comoTexto(fila.sucursal),
+		codigo: comoTexto(fila.codigo),
+	}))
+}
+
+export interface EventoGuardado {
+	readonly id: number
+	readonly tipo: TipoEvento
+	readonly ocurridoEn: string
+	readonly detalle: string | null
+	readonly facturaId: number | null
+}
+
+/** El historial del expediente, de lo más reciente a lo más viejo. */
+export function eventosDeCliente(almacen: Almacen, clienteId: string, limite = 200): readonly EventoGuardado[] {
+	const filas = almacen.db.prepare(
+		'SELECT * FROM evento WHERE cliente_id = ? ORDER BY ocurrido_en DESC, id DESC LIMIT ?',
+	).all(clienteId, Math.min(Math.max(limite, 1), 1_000)) as Array<Record<string, unknown>>
+	return filas.map(fila => ({
+		id: comoEntero(fila.id),
+		tipo: comoTexto(fila.tipo, 'cliente_creado') as TipoEvento,
+		ocurridoEn: comoTexto(fila.ocurrido_en),
+		detalle: comoTextoONulo(fila.detalle),
+		facturaId: comoEnteroONuloLocal(fila.factura_id),
+	}))
+}
+
+const comoEnteroONuloLocal = (valor: unknown): number | null =>
+	typeof valor === 'number' || typeof valor === 'bigint' ? comoEntero(valor) : null

@@ -10,7 +10,7 @@
 
 import type { Centavos } from '../dominio/dinero.ts'
 import type { FacturaAbierta } from '../dominio/pagos.ts'
-import { comoEntero, comoTexto, type Almacen } from './base.ts'
+import { comoEntero, comoTexto, comoTextoONulo, type Almacen } from './base.ts'
 import { DatosInvalidos, INSTANTE } from './clientes.ts'
 
 const PERIODO = /^\d{4}-\d{2}$/
@@ -91,20 +91,27 @@ export function deudasImportadas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO
  * Las facturas que la corrida de pagadas tiene que revisar contra el libro del administrador,
  * en orden estable (contrato, periodo, cuota) para que la corrida sea reproducible.
  */
-export function facturasAbiertas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaAbierta[] {
+/** La factura más su titular: la corrida de pagadas lo necesita para el acta y para el evento. */
+export interface FacturaConTitular extends FacturaAbierta {
+	readonly clienteId: string
+	readonly clienteNombre: string
+}
+
+export function facturasAbiertas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaConTitular[] {
 	return facturasPorEstado(almacen, 'abierta', proveedorId)
 }
 
 /** Las que Cobrix ya tenía pagadas: la corrida las explica como `ya_pagada` sin preguntar nada. */
-export function facturasPagadas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaAbierta[] {
+export function facturasPagadas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaConTitular[] {
 	return facturasPorEstado(almacen, 'pagada', proveedorId)
 }
 
-function facturasPorEstado(almacen: Almacen, estado: 'abierta' | 'pagada', proveedorId: number): readonly FacturaAbierta[] {
+function facturasPorEstado(almacen: Almacen, estado: 'abierta' | 'pagada', proveedorId: number): readonly FacturaConTitular[] {
 	const filas = almacen.db.prepare(`
-		SELECT id, deuda_id, contrato_id, periodo, total, saldo FROM factura
-		WHERE proveedor_id = ? AND estado = ?
-		ORDER BY contrato_id, periodo, deuda_id`).all(proveedorId, estado) as Array<Record<string, unknown>>
+		SELECT f.id, f.deuda_id, f.contrato_id, f.periodo, f.total, f.saldo, f.cliente_id, c.nombre
+		FROM factura f JOIN cliente c ON c.id = f.cliente_id
+		WHERE f.proveedor_id = ? AND f.estado = ?
+		ORDER BY f.contrato_id, f.periodo, f.deuda_id`).all(proveedorId, estado) as Array<Record<string, unknown>>
 	return filas.map(fila => ({
 		facturaId: comoEntero(fila.id),
 		deudaId: comoTexto(fila.deuda_id),
@@ -112,6 +119,8 @@ function facturasPorEstado(almacen: Almacen, estado: 'abierta' | 'pagada', prove
 		periodo: comoTexto(fila.periodo),
 		total: comoEntero(fila.total),
 		saldo: comoEntero(fila.saldo),
+		clienteId: comoTexto(fila.cliente_id),
+		clienteNombre: comoTexto(fila.nombre),
 	}))
 }
 
@@ -178,4 +187,46 @@ export function totalesDeCartera(almacen: Almacen): TotalesCartera {
 		porCobrar: comoEntero(fila.por_cobrar),
 		cobrado: comoEntero(fila.cobrado),
 	}
+}
+
+/** Una factura completa, como la enseña el expediente (ENUNCIADO.md §3.6). */
+export interface FacturaGuardada {
+	readonly id: number
+	readonly deudaId: string
+	readonly clienteId: string
+	readonly contratoId: number
+	readonly periodo: string
+	readonly venceEl: string
+	readonly cortaEl: string
+	readonly total: Centavos
+	readonly saldo: Centavos
+	readonly estado: 'abierta' | 'pagada'
+	readonly pagadaEl: string | null
+	readonly ispFacturaNum: string | null
+	readonly corridaCreacion: number
+	readonly corridaPago: number | null
+}
+
+export function facturasDeCliente(almacen: Almacen, clienteId: string): readonly FacturaGuardada[] {
+	const filas = almacen.db.prepare(
+		'SELECT * FROM factura WHERE cliente_id = ? ORDER BY periodo DESC, contrato_id, deuda_id',
+	).all(clienteId) as Array<Record<string, unknown>>
+	return filas.map(fila => ({
+		id: comoEntero(fila.id),
+		deudaId: comoTexto(fila.deuda_id),
+		clienteId: comoTexto(fila.cliente_id),
+		contratoId: comoEntero(fila.contrato_id),
+		periodo: comoTexto(fila.periodo),
+		venceEl: comoTexto(fila.vence_el),
+		cortaEl: comoTexto(fila.corta_el),
+		total: comoEntero(fila.total),
+		saldo: comoEntero(fila.saldo),
+		estado: comoTexto(fila.estado) === 'pagada' ? 'pagada' : 'abierta',
+		pagadaEl: comoTextoONulo(fila.pagada_el),
+		ispFacturaNum: comoTextoONulo(fila.isp_factura_num),
+		corridaCreacion: comoEntero(fila.corrida_creacion),
+		corridaPago: typeof fila.corrida_pago === 'number' || typeof fila.corrida_pago === 'bigint'
+			? comoEntero(fila.corrida_pago)
+			: null,
+	}))
 }

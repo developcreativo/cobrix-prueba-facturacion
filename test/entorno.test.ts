@@ -1,6 +1,14 @@
 /**
- * Checks the environment handed to the candidate: the API answers as documented, every
- * documented route exists and the panel skeleton serves its screens.
+ * Comprueba el entorno de la prueba: la API del administrador responde como está documentada,
+ * todas sus rutas existen y el panel de Cobrix se sirve con su API.
+ *
+ * ACTUALIZADO al construir el panel. Las dos primeras pruebas son las entregadas y no cambian: la
+ * API simulada sigue siendo el material del cliente. La tercera afirmaba que cada pantalla decía
+ * «Por implementar», que era cierto del esqueleto de `src/web/` y dejó de serlo cuando el panel
+ * pasó a ser la aplicación de `web/` servida desde `src/cobrix/http/servidor.ts` (ENUNCIADO.md
+ * §3.7 autoriza reemplazarlo). Lo que se verifica ahora es lo mismo en espíritu —el panel se
+ * sirve, el enunciado sigue en `/enunciado` y la caja del ISP no es una pantalla del panel— más
+ * dos cosas que el esqueleto no tenía: el enrutador del navegador y la API JSON.
  */
 
 import assert from 'node:assert/strict'
@@ -11,7 +19,8 @@ import { after, before, describe, it } from 'node:test'
 
 import { SANDBOX_API_USER, seedBillingApi } from '../src/billing-api/seed.ts'
 import { createBillingApiServer, type BillingApiServer } from '../src/billing-api/server.ts'
-import { createApp } from '../src/web/app.ts'
+import { abrirAlmacen, type Almacen } from '../src/cobrix/almacen/base.ts'
+import { crearServidorPanel, type ServidorPanel } from '../src/cobrix/http/servidor.ts'
 
 process.env.SANDBOX_TODAY = '2026-10-13'
 
@@ -19,7 +28,8 @@ describe('entorno de la prueba', () => {
 	let dir: string
 	let api: BillingApiServer
 	let base: string
-	let panel: ReturnType<typeof createApp>
+	let almacen: Almacen
+	let panel: ServidorPanel
 	let panelBase: string
 
 	before(async () => {
@@ -27,14 +37,18 @@ describe('entorno de la prueba', () => {
 		seedBillingApi(join(dir, 'billing-api.sqlite'))
 		api = createBillingApiServer(join(dir, 'billing-api.sqlite'))
 		base = `http://127.0.0.1:${await api.listen(0)}`
-		panel = createApp({ simulatorUrl: base, assignmentPath: new URL('../docs/ENUNCIADO.md', import.meta.url).pathname })
-		await new Promise<void>(resolve => panel.listen(0, '127.0.0.1', resolve))
-		const address = panel.address()
-		panelBase = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+		almacen = abrirAlmacen({ ruta: ':memory:' })
+		panel = crearServidorPanel({
+			almacen,
+			raizPanel: new URL('../web/dist', import.meta.url).pathname,
+			rutaEnunciado: new URL('../docs/ENUNCIADO.md', import.meta.url).pathname,
+		})
+		panelBase = `http://127.0.0.1:${await panel.escuchar(0)}`
 	})
 
 	after(async () => {
-		await new Promise(resolve => panel.close(resolve))
+		await panel.cerrar()
+		almacen.cerrar()
 		await api.close()
 		rmSync(dir, { recursive: true, force: true })
 	})
@@ -60,13 +74,37 @@ describe('entorno de la prueba', () => {
 		}
 	})
 
-	it('el panel sirve el esqueleto y el enunciado, sin pantalla de simulador', async () => {
-		for (const path of ['/', '/clientes', '/clientes/1', '/sincronizacion', '/configuracion']) {
-			const body = await (await fetch(`${panelBase}${path}`)).text()
-			assert.match(body, /Por implementar/, path)
+	it('el panel se sirve con su API y el enunciado, sin pantalla de simulador', async () => {
+		assert.equal(panel.panelCompilado, true, 'web/dist tiene que estar compilado: npm --prefix web run build')
+
+		// La raíz y cualquier ruta del enrutador sirven el mismo index.html: recargar en
+		// /clientes/V12345678 no puede dar 404.
+		const raiz = await fetch(`${panelBase}/`)
+		assert.equal(raiz.status, 200)
+		assert.match(raiz.headers.get('content-type') ?? '', /text\/html/)
+		const html = await raiz.text()
+		assert.match(html, /<div id="root">/)
+		assert.match(html, /Cobrix/)
+		for (const ruta of ['/clientes', '/clientes/V12345678', '/sincronizacion', '/configuracion']) {
+			const respuesta = await fetch(`${panelBase}${ruta}`)
+			assert.equal(respuesta.status, 200, ruta)
+			assert.equal(await respuesta.text(), html, `${ruta} sirve el panel, no una página distinta`)
 		}
+
+		// Los recursos compilados se sirven con su tipo.
+		const icono = await fetch(`${panelBase}/favicon.svg`)
+		assert.equal(icono.status, 200)
+		assert.match(icono.headers.get('content-type') ?? '', /image\/svg/)
+
+		// La API JSON del panel responde: eso es lo nuevo respecto del esqueleto.
+		const salud = await (await fetch(`${panelBase}/api/salud`)).json() as Record<string, unknown>
+		assert.deepEqual(salud.sandbox, { hoy: '2026-10-13', periodo_actual: '2026-10' })
+
+		// La caja del ISP (`/__sim/*`) no es parte del panel ni se proxea desde él.
+		assert.doesNotMatch(html, /Simulador del administrador/)
+		assert.equal((await fetch(`${panelBase}/api/__sim/pagar`, { method: 'POST', body: '{}' })).status, 404)
+		assert.equal((await fetch(`${panelBase}/api/simulador`)).status, 404)
+
 		assert.match(await (await fetch(`${panelBase}/enunciado`)).text(), /Criterios de aceptación/)
-		assert.equal((await fetch(`${panelBase}/simulador`)).status, 404)
-		assert.doesNotMatch(await (await fetch(`${panelBase}/`)).text(), /Simulador del administrador/)
 	})
 })

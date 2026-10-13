@@ -517,8 +517,8 @@ describe('cerrojo de corridas', () => {
 describe('escrituras del almacén, una por una', () => {
 	const MOMENTO = '2026-10-13T09:00:00'
 	const CLIENTE: DatosCliente = {
-		id: 'V12345678', tipoDocumento: 'V', numero: '12345678', nombre: 'ANA PEREZ',
-		persona: 'natural', email: 'ana@example.com', telefono: '04121000000',
+		id: 'V12345678', identificacionBruta: 'V-12345678', tipoDocumento: 'V', numero: '12345678',
+		nombre: 'ANA PEREZ', persona: 'natural', email: 'ana@example.com', telefono: '04121000000',
 	}
 	const CONTRATO: DatosContrato = {
 		id: 900101, codigo: '0900101', estado: 'ACTIVO', plan: 'PLAN15MB25',

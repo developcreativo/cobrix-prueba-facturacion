@@ -32,13 +32,15 @@ import {
 	abrirCorrida, cerrarCorrida, fallarCorrida, guardarLineas,
 	type DisparoCorrida, type ErrorCorrida, type LineaCorridaEntrada,
 } from '../almacen/corridas.ts'
-import { facturasAbiertas, facturasPagadas, marcarPagada } from '../almacen/facturas.ts'
+import { facturasAbiertas, facturasPagadas, marcarPagada, type FacturaConTitular } from '../almacen/facturas.ts'
 import { mapConLimite } from '../apoyo/limite.ts'
+import { reglasDe } from '../dominio/configuracion.ts'
 import { usd, type Centavos } from '../dominio/dinero.ts'
-import { evaluarPago, veredictoSinLibro, type FacturaAbierta, type VeredictoPago } from '../dominio/pagos.ts'
+import { evaluarPago, veredictoSinLibro, type VeredictoPago } from '../dominio/pagos.ts'
 import { describir, pasoDescarta, pasoOk, type PasoTraza, type Resultado } from '../dominio/resultados.ts'
 import type { FilaLibro } from '../dominio/tipos.ts'
 import { ProveedorSinCredenciales } from './importacion.ts'
+import { crearProgreso, type AlProgresar } from './progreso.ts'
 
 const CONCURRENCIA_POR_DEFECTO = 4
 
@@ -48,6 +50,8 @@ export interface OpcionesCorridaPagadas {
 	readonly disparo?: DisparoCorrida
 	readonly opcionesCliente?: OpcionesCliente
 	readonly concurrencia?: number
+	/** Progreso en vivo para el SSE del panel. Sin esto, la corrida no gasta nada en progreso. */
+	readonly alProgresar?: AlProgresar
 }
 
 export interface ContadoresPagadas {
@@ -72,7 +76,7 @@ export interface ResultadoCorridaPagadas {
 
 /** Una factura revisada con su veredicto: lo que va a la línea y, si toca, a la escritura. */
 interface Decision {
-	readonly factura: FacturaAbierta
+	readonly factura: FacturaConTitular
 	readonly veredicto: VeredictoPago
 }
 
@@ -95,11 +99,16 @@ export async function correrActualizacionDePagadas(
 		disparo: opciones.disparo ?? 'manual',
 		configuracion: {
 			proveedor: { nombre: proveedor.nombre, apiUrl: proveedor.apiUrl, usuario: proveedor.usuario },
+			// Las reglas no deciden nada aquí, pero el detalle de la corrida enseña el mismo
+			// bloque de configuración para los dos tipos: una sola forma que leer en el panel.
+			reglas: reglasDe(proveedor),
 			periodoActual,
 			ventanaDelLibro: { hasta, desde: 'el primer día del periodo más viejo abierto en cada contrato' },
 		},
 	})
 
+	const progreso = crearProgreso(corrida.id, 'Conectando con el administrador', 0, opciones.alProgresar)
+	progreso.empezar()
 	const lineas: LineaCorridaEntrada[] = []
 	let contratos = 0
 
@@ -113,15 +122,16 @@ export async function correrActualizacionDePagadas(
 		const decisiones: Decision[] = yaPagadas.map(factura => ({ factura, veredicto: veredictoYaPagada(factura) }))
 
 		// 2. Solo las abiertas van al libro. Sin ninguna, la corrida no toca la API.
+		progreso.fijarTotal(porContrato.length, 'Revisando el libro de cuotas')
 		if (porContrato.length > 0) {
 			const api = crearCliente(credenciales, opciones.opcionesCliente)
-			// El primer contrato va solo, a propósito: deja el token en memoria para los demás. Si
-			// salieran los cuatro de golpe sin token, cada uno iniciaría sesión por su cuenta y la
-			// corrida haría cuatro logins en vez de uno.
-			const [primero, ...resto] = porContrato
-			decisiones.push(...await revisarContrato(api, primero!, hasta))
-			const porLote = await mapConLimite(resto, concurrencia,
-				async grupo => await revisarContrato(api, grupo, hasta))
+			// Los cuatro obreros pueden arrancar juntos: `api/cliente.ts` comparte el login en vuelo
+			// y hacen una sola sesión entre todos.
+			const porLote = await mapConLimite(porContrato, concurrencia, async grupo => {
+				const lote = await revisarContrato(api, grupo, hasta)
+				progreso.avanzar(lote.map(lineaDePago))
+				return lote
+			})
 			for (const lote of porLote) decisiones.push(...lote)
 		}
 
@@ -136,6 +146,7 @@ export async function correrActualizacionDePagadas(
 			return cuenta
 		})
 
+		progreso.cerrar(contadores.lineas)
 		return {
 			corridaId: corrida.id,
 			estado: 'completada',
@@ -150,6 +161,7 @@ export async function correrActualizacionDePagadas(
 		const sinEscrituras = lineas.filter(linea => linea.resultado !== 'marcada_pagada')
 		const contadores = contar(sinEscrituras, contratos)
 		const detalle = describirError(error)
+		progreso.cerrar(contadores.lineas, `Corrida fallida: ${detalle.mensaje}`)
 		enTransaccion(almacen.db, () => {
 			guardarLineas(almacen, corrida.id, sinEscrituras)
 			fallarCorrida(almacen, corrida.id, detalle, {
@@ -170,13 +182,13 @@ export async function correrActualizacionDePagadas(
 
 interface GrupoContrato {
 	readonly contratoId: number
-	readonly facturas: readonly FacturaAbierta[]
+	readonly facturas: readonly FacturaConTitular[]
 	/** Primer día del periodo más viejo abierto: el inicio de la ventana del libro. */
 	readonly desde: string
 }
 
-function agruparPorContrato(abiertas: readonly FacturaAbierta[]): readonly GrupoContrato[] {
-	const porContrato = new Map<number, FacturaAbierta[]>()
+function agruparPorContrato(abiertas: readonly FacturaConTitular[]): readonly GrupoContrato[] {
+	const porContrato = new Map<number, FacturaConTitular[]>()
 	for (const factura of abiertas) {
 		const grupo = porContrato.get(factura.contratoId)
 		if (grupo === undefined) porContrato.set(factura.contratoId, [factura])
@@ -221,7 +233,7 @@ async function revisarContrato(
 	}
 
 	const decisiones: Decision[] = []
-	const pendientesDeContrato: Array<{ factura: FacturaAbierta; traza: readonly PasoTraza[] }> = []
+	const pendientesDeContrato: Array<{ factura: FacturaConTitular; traza: readonly PasoTraza[] }> = []
 	for (const factura of grupo.facturas) {
 		const evaluacion = evaluarPago(factura, porCuota.get(factura.deudaId) ?? [])
 		if (evaluacion.tipo === 'veredicto') decisiones.push({ factura, veredicto: evaluacion.veredicto })
@@ -267,7 +279,7 @@ function escribirPagos(almacen: Almacen, corridaId: number, decisiones: readonly
 			corridaPago: corridaId,
 		})
 		registrarEvento(almacen, {
-			clienteId: clienteDe(almacen, factura.facturaId),
+			clienteId: factura.clienteId,
 			facturaId: factura.facturaId,
 			tipo: 'factura_pagada',
 			corridaId,
@@ -276,15 +288,11 @@ function escribirPagos(almacen: Almacen, corridaId: number, decisiones: readonly
 	}
 }
 
-/** El evento vive en el expediente del cliente, así que necesita a quién colgarse. */
-function clienteDe(almacen: Almacen, facturaId: number): string {
-	const fila = almacen.db.prepare('SELECT cliente_id FROM factura WHERE id = ?').get(facturaId) as Record<string, unknown> | undefined
-	return typeof fila?.cliente_id === 'string' ? fila.cliente_id : ''
-}
-
 function lineaDePago({ factura, veredicto }: Decision): LineaCorridaEntrada {
 	return {
 		contratoId: factura.contratoId,
+		titularNombre: factura.clienteNombre,
+		titularIdentificacion: factura.clienteId,
 		deudaId: factura.deudaId,
 		periodo: factura.periodo,
 		// Lo que está en juego: el saldo abierto o, si ya estaba pagada, lo que se cobró.
@@ -297,7 +305,7 @@ function lineaDePago({ factura, veredicto }: Decision): LineaCorridaEntrada {
 	}
 }
 
-function veredictoYaPagada(factura: FacturaAbierta): VeredictoPago {
+function veredictoYaPagada(factura: FacturaConTitular): VeredictoPago {
 	return {
 		resultado: 'ya_pagada',
 		motivo: `Cobrix ya la tenía pagada: no se vuelve a revisar contra el administrador.`,
@@ -308,7 +316,7 @@ function veredictoYaPagada(factura: FacturaAbierta): VeredictoPago {
 	}
 }
 
-function veredictoIlegible(factura: FacturaAbierta, motivo: string, regla: string): VeredictoPago {
+function veredictoIlegible(factura: FacturaConTitular, motivo: string, regla: string): VeredictoPago {
 	return {
 		resultado: 'inconsistente',
 		motivo: `${motivo} La factura ${factura.facturaId} queda intacta: nada se adivina.`,

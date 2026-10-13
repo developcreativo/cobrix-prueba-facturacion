@@ -31,6 +31,15 @@ almacen/     persistencia (node:sqlite)
 corridas/    orquestación (conecta api/ + dominio/ + almacen/)
   importacion   la corrida de importación, real y simulada
   pagadas       la corrida de actualización de pagadas, real y simulada
+  progreso      eventos en vivo de una corrida; si nadie escucha, no cuesta nada
+
+http/        la API JSON del panel y el servidor que lo sirve
+  api           los endpoints de /api, con un solo formato de error
+  vista         de la base al contrato del panel: snake_case e instantes con desfase
+  bus           reparto del progreso a los clientes conectados por SSE
+  servidor      /api + el panel compilado de web/dist + /enunciado
+
+planificador  corrida automática diaria (importar y después pagadas), con reloj inyectable
 
 apoyo/
   secreto       AES-256-GCM para la contraseña del proveedor
@@ -52,7 +61,9 @@ ENUNCIADO.md §4 se prueban en tablas, sin servidor ni base.
 | Topes por corrida (son de la corrida: se aplican una vez sobre todas las candidatas) | `dominio/importacion.ts` (`aplicarTopes`) + `corridas/importacion.ts` |
 | Idempotencia | `dominio/importacion.ts` + `corridas/importacion.ts` (lee los `deuda_id` ya importados) + `UNIQUE (proveedor_id, deuda_id)` en `almacen/esquema.ts` |
 | Simular sin escribir, atomicidad de la corrida real y corrida fallida con su error | `corridas/importacion.ts` + `almacen/corridas.ts` |
-| Una sola corrida real a la vez | `almacen/corridas.ts` (tabla `bloqueo`) |
+| Una sola corrida real a la vez | `almacen/corridas.ts` (tabla `bloqueo`) + `409` en `http/api.ts` |
+| La contraseña entra y no sale | `almacen/configuracion.ts` + `http/vista.ts` (`password_definida`) |
+| Corrida automática diaria a una hora, sin solaparse | `planificador.ts` |
 | El expediente refleja el ISP: refrescar titular y contrato **sin** insertar | `dominio/importacion.ts` (`frescos`) + `almacen/clientes.ts` (`refrescarCliente`, `refrescarContrato`) |
 | Pagada, abono parcial, exonerada, sin evidencia | `dominio/pagos.ts` |
 | La ventana del libro (hasta el último día del periodo actual) y el desempate del mes en curso | `corridas/pagadas.ts` |
@@ -65,9 +76,10 @@ juzgar la moneda».
 ## Pruebas
 
 ```bash
-npm test          # dominio (tablas) + API (sandbox y stub) + almacén + corridas (ciclo completo)
+npm test          # dominio + API del ISP + almacén + corridas (ciclo completo) + API del panel
 npm run typecheck
 ```
 
-Pendiente: planificador de la corrida automática, API del panel y pantallas
-(ver `docs/SPEC.md` §3).
+El panel (React + Tailwind + shadcn/ui) vive en `web/` y se sirve compilado desde
+`http/servidor.ts`; el esqueleto entregado en `src/web/` ya no se usa (ENUNCIADO.md §3.7
+autoriza reemplazarlo).

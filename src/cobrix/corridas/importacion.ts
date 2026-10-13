@@ -46,6 +46,7 @@ import {
 	type Candidata, type ContextoImportacion, type DatosFrescos,
 } from '../dominio/importacion.ts'
 import { describir, pasoOk, pasoOmitida, type Resultado } from '../dominio/resultados.ts'
+import { crearProgreso, type AlProgresar } from './progreso.ts'
 
 const CONCURRENCIA_POR_DEFECTO = 4
 
@@ -67,6 +68,8 @@ export interface OpcionesCorrida {
 	/** Para las pruebas: reintentos sin espera, `fetch` propio, tiempos más cortos. */
 	readonly opcionesCliente?: OpcionesCliente
 	readonly concurrencia?: number
+	/** Progreso en vivo para el SSE del panel. Sin esto, la corrida no gasta nada en progreso. */
+	readonly alProgresar?: AlProgresar
 }
 
 export interface ContadoresImportacion {
@@ -121,6 +124,8 @@ export async function correrImportacion(
 	})
 
 	const momento = corrida.inicio
+	const progreso = crearProgreso(corrida.id, 'Conectando con el administrador', 0, opciones.alProgresar)
+	progreso.empezar()
 	const lineas: LineaCorridaEntrada[] = []
 	let contratos = 0
 	let cuotasVistas = 0
@@ -131,7 +136,6 @@ export async function correrImportacion(
 		const api = crearCliente(credenciales, opciones.opcionesCliente)
 		const ids = [...await api.idsDeContratos()].sort((a, b) => a - b)
 		contratos = ids.length
-
 		const contexto: ContextoImportacion = {
 			periodoActual: currentPeriod(),
 			configuracion: reglas,
@@ -139,19 +143,27 @@ export async function correrImportacion(
 		}
 		const conocidos = clientesExistentes(almacen)
 		const contratosConocidos = contratosExistentes(almacen)
-		const lecturas = await mapConLimite(ids, concurrencia, id => api.cuotasDeContrato(id))
+		// 2. Cada contrato se lee y se clasifica en su obrero, para poder contarlo en vivo; el
+		// ensamblado va después, en el orden de los contratos y no en el de las respuestas.
+		progreso.fijarTotal(ids.length, 'Leyendo contratos del administrador')
+		const clasificaciones = await mapConLimite(ids, concurrencia, async id => {
+			const lectura = await api.cuotasDeContrato(id)
+			const clasificacion = clasificarContrato(id, lectura, contexto)
+			progreso.avanzar(clasificacion.lineas)
+			return {
+				clasificacion,
+				cuotas: lectura.ok ? lectura.datos.filter(fila => fila.deudaId !== '0').length : 0,
+			}
+		})
 
-		// 2. Clasificación, en el orden de los contratos y no en el de las respuestas.
 		const candidatas: Candidata[] = []
 		const frescos: DatosFrescos[] = []
-		ids.forEach((id, indice) => {
-			const lectura = lecturas[indice]!
-			if (lectura.ok) cuotasVistas += lectura.datos.filter(fila => fila.deudaId !== '0').length
-			const clasificacion = clasificarContrato(id, lectura, contexto)
+		for (const { clasificacion, cuotas } of clasificaciones) {
+			cuotasVistas += cuotas
 			lineas.push(...clasificacion.lineas)
 			candidatas.push(...clasificacion.candidatas)
 			if (clasificacion.frescos !== null) frescos.push(clasificacion.frescos)
-		})
+		}
 
 		// 3. Los topes son de la corrida: se aplican una sola vez, sobre todas las candidatas.
 		const { aImportar, frenadas } = aplicarTopes(candidatas, reglas)
@@ -189,6 +201,7 @@ export async function correrImportacion(
 			return cuenta
 		})
 
+		progreso.cerrar(contadores.lineas)
 		return {
 			corridaId: corrida.id,
 			estado: 'completada',
@@ -203,6 +216,7 @@ export async function correrImportacion(
 		const sinEscrituras = lineas.filter(linea => linea.resultado !== 'importada')
 		const contadores = contar(sinEscrituras, { contratos, cuotasVistas, clientesNuevos: 0 })
 		const detalle = describirError(error)
+		progreso.cerrar(contadores.lineas, `Corrida fallida: ${detalle.mensaje}`)
 		enTransaccion(almacen.db, () => {
 			guardarLineas(almacen, corrida.id, sinEscrituras)
 			fallarCorrida(almacen, corrida.id, detalle, {
@@ -306,6 +320,8 @@ function lineaImportada(candidata: Candidata, facturaId: number | null): LineaCo
 		: pasoOk('creación de la factura', `factura ${facturaId} de Cobrix por ${usd(candidata.monto)}`)
 	return {
 		contratoId: candidata.contratoId,
+		titularNombre: candidata.cliente.nombre,
+		titularIdentificacion: candidata.cliente.id,
 		deudaId: candidata.deudaId,
 		periodo: candidata.periodo,
 		monto: candidata.monto,
