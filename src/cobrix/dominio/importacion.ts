@@ -12,6 +12,21 @@
  * «moneda incoherente»: la corrida daría 2 contratos por moneda y 0 residuales en vez de
  * 1 y 1, y perdería las otras cuotas legítimas de esa clienta. Secuencia correcta:
  *   deuda_id "0" → estado → identificación → saldo residual → coherencia de moneda → cuota a cuota.
+ *
+ * POR QUÉ EXISTE `frescos`. El expediente muestra el contrato tal como está en el ISP: estado,
+ * plan, precio y sucursal (ENUNCIADO.md §3.6). Si esos datos solo se actualizaran al importar una
+ * cuota nueva, un contrato que pasa a CORTADO y no debe nada se quedaría ACTIVO en Cobrix para
+ * siempre, y el panel mentiría sobre el ISP. Por eso la clasificación devuelve también los datos
+ * vigentes del titular y del contrato, y los devuelve SOLO cuando el contrato superó todas las
+ * comprobaciones de contrato (estado conocido e importable, identificación normalizable, tipo de
+ * documento permitido y moneda coherente), que es justo cuando el flujo llega a la etapa cuota a
+ * cuota. Si el contrato cayó antes, no hay nada fresco que ofrecer.
+ *
+ * Y EL LÍMITE DURO: refrescar ACTUALIZA, NUNCA INSERTA. Quien consuma `frescos` solo puede tocar
+ * clientes y contratos que Cobrix ya tiene. Si pudiera crear, cualquier titular cuyas cuotas
+ * queden todas fuera (por ventana, por máximo de recientes o porque ya están importadas)
+ * aparecería como cliente sin una sola factura y los 20 clientes de la aceptación pasarían a ser
+ * más. `frescos` describe el presente del ISP; quién entra a Cobrix lo decide `candidatas`.
  */
 
 import { addMonths } from '../../shared/dates.ts'
@@ -95,9 +110,20 @@ export interface Candidata {
 	readonly traza: readonly PasoTraza[]
 }
 
+/** Datos vigentes del titular y del contrato: sirven para REFRESCAR lo que Cobrix ya tiene. */
+export interface DatosFrescos {
+	readonly cliente: DatosCliente
+	readonly contrato: DatosContrato
+}
+
 export interface ClasificacionContrato {
 	readonly lineas: readonly LineaImportacion[]
 	readonly candidatas: readonly Candidata[]
+	/**
+	 * `null` cuando el contrato quedó fuera antes de la etapa cuota a cuota: no se refresca lo
+	 * que no se pudo verificar. Nunca autoriza a crear un cliente ni un contrato (ver cabecera).
+	 */
+	readonly frescos: DatosFrescos | null
 }
 
 export function clasificarContrato(
@@ -117,7 +143,7 @@ export function clasificarContrato(
 	}
 
 	const filas = lectura.datos
-	if (filas.length === 0) return { lineas: [], candidatas: [] }
+	if (filas.length === 0) return { lineas: [], candidatas: [], frescos: null }
 	const base = filas[0]!
 
 	// 1. La fila con deuda_id "0" no es una cuota: el contrato no debe nada.
@@ -283,7 +309,7 @@ export function clasificarContrato(
 		})
 	}
 
-	return { lineas, candidatas }
+	return { lineas, candidatas, frescos: { cliente, contrato } }
 }
 
 /**
@@ -333,7 +359,7 @@ export function aplicarTopes(
 }
 
 function soloLineas(lineas: readonly LineaImportacion[]): ClasificacionContrato {
-	return { lineas, candidatas: [] }
+	return { lineas, candidatas: [], frescos: null }
 }
 
 function lineaDeContrato(
