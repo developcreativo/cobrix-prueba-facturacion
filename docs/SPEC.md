@@ -365,7 +365,7 @@ que no se vuelvan a discutir ni se «arreglen» de vuelta.
 | `cliente.identificacion_bruta` | §3.5 y §3.6 muestran «documento». Guardamos la identificación normalizada como clave, que es correcto, pero mostrar `V12345678` cuando el ISP publica `V-12345678` es una pequeña mentira en una pantalla cuyo trabajo es reflejar al ISP. |
 
 **Se calculan en la capa HTTP, sin tocar el esquema.** `duracion_ms` (de `inicio` y `fin`), el
-número de factura de Cobrix (`COB-000042`, formateado a partir de `factura.id`), el `titulo` de
+número de factura de Cobrix (`FAC-000042`, formateado a partir de `factura.id`), el `titulo` de
 cada evento (del `tipo`), `proxima_ejecucion` (de `auto_hora` y la fecha del sandbox),
 `ultima_ejecucion` (la última corrida con `disparo = 'automatica'`), `sandbox.hoy` y
 `sandbox.periodo_actual` (de `src/shared/dates.ts`), y los agregados por cliente de la tabla de
