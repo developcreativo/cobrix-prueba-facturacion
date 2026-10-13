@@ -124,7 +124,7 @@ Totales (clientes, contratos, abiertas, pagadas, monto por cobrar), proveedor co
 | HTTP del panel | **`node:http` + router propio** (≈80 líneas) o **Hono** si se quiere middleware | API JSON pequeña y estable (12 endpoints). Hono es la alternativa razonable si se prefiere ergonomía a cero-deps. |
 | Frontend | **Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui** (Radix) + TanStack Query + React Router | Pedido explícitamente; shadcn da tablas, diálogos y formularios accesibles sin «look de IA». Radix resuelve foco y teclado, que son parte de la aceptación. |
 | Tablas | **TanStack Table** (headless) | Orden, filtro y paginación sobre 42–200 filas sin reinventarlo. |
-| Validación de entrada | **Zod** compartido entre API y formularios | Un solo esquema para validar el body del panel y el formulario de configuración. |
+| Validación de entrada | ~~Zod~~ → **validadores propios del dominio** | Ver la corrección fechada al final de §3.8: se mantuvo el cero-dependencias. |
 | Tests | **`node:test`** + `undici` para integración; **Playwright** opcional para un happy-path de UI | `node:test` ya está en `npm test`; no agrega runner nuevo. |
 | Logs | JSON estructurado a stdout, propio (≈30 líneas) | Correlación por `corrida_id`; suficiente para la prueba, sin Pino. |
 
@@ -335,7 +335,7 @@ Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impi
 | Método | Ruta | Uso |
 | --- | --- | --- |
 | `GET` | `/api/resumen` | totales, proveedor, estado del automático, últimas corridas |
-| `GET` `PUT` | `/api/configuracion` | leer (sin contraseña) / guardar validado con Zod |
+| `GET` `PUT` | `/api/configuracion` | leer (sin contraseña) / guardar validado en el dominio |
 | `POST` | `/api/configuracion/probar-conexion` | login + conteo de contratos |
 | `POST` | `/api/corridas` | `{ tipo: 'importacion'\|'pagadas', simulacion: boolean }` → `201` o `409` |
 | `GET` | `/api/corridas` | historial paginado |
@@ -348,6 +348,13 @@ Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impi
 Errores siempre con la misma forma: `{ error: { codigo, mensaje, endpoint, status, sugerencia } }`, con `codigo` estable.
 
 > **Corregido el 2026-10-13, al implementar.** Esta línea decía `{ codigo, mensaje, detalle?, endpoint? }` y dejaba que la UI eligiera la sugerencia a partir del `codigo`. El código real (`ErrorApi` en `src/cobrix/api/cliente.ts` y `ErrorCorrida` en `src/cobrix/almacen/corridas.ts`) ya redacta la **`sugerencia`** —«Revisa el usuario y la contraseña en Configuración → Proveedor»— y conserva el `status` HTTP. Que el panel reimplantara esa redacción habría puesto el «cómo seguir» del §3.7 en dos sitios, condenados a divergir. Manda el código: el panel muestra la sugerencia del backend tal cual. No revertir.
+
+> **Corregido el 2026-10-13, al implementar.** Esta spec planeaba **Zod** para validar el borde
+> HTTP. No se usó: el proyecto llegó a la capa HTTP con cero dependencias de producción y
+> `dominio/configuracion.ts` ya tenía `validarEmpresa` y `validarProveedor`, que devuelven la lista
+> de problemas legibles que el panel pinta. Añadir una dependencia para repetir esa validación
+> habría sido pagar peso por nada. Si algún día entra una, que sea para algo que el dominio no
+> sepa hacer.
 
 Los instantes viajan en ISO **con desfase explícito** (`2026-10-13T14:03:11-04:00`). El almacén guarda hora civil de Caracas sin zona, y es la capa HTTP la que añade el desfase: enviarla cruda desplazaría el historial varias horas según la máquina que lo mire.
 
@@ -492,7 +499,7 @@ Recomendación: entregar 5.2 + 5.3 + `npm run demo` + reloj del sandbox. Es el c
 ### 5.5 Seguridad y robustez mínimas
 
 - Contraseña del proveedor cifrada (AES-256-GCM, clave en `COBRIX_SECRET`, generada al primer arranque si no existe); nunca en logs, nunca en respuestas, nunca en el snapshot de configuración.
-- Validación de todo input con Zod en el borde HTTP; sin `any` en el dominio.
+- Validación de todo input en el borde HTTP con los validadores de `dominio/configuracion.ts`; sin `any` en el dominio.
 - Sin SQL concatenado: solo `prepare` con parámetros.
 - Logs JSON con `corrida_id`; los cuerpos de la API se registran truncados y sin credenciales.
 - Timeouts y concurrencia acotados: la integración no puede tumbar al ISP ni colgarse indefinidamente.

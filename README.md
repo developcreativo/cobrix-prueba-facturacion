@@ -11,8 +11,13 @@ npm install
 npm start
 ```
 
-Requiere **Node 24 o superior**. La primera vez, `npm start` compila el panel (toma unos
-segundos); si no puede, lo dice con el comando exacto y la API sigue en pie.
+Requiere **Node 24 o superior**. La primera vez, `npm start` **compila el panel**: instala sus
+dependencias (unos 420 paquetes) y lo construye, lo que tarda unos segundos con la caché de npm
+caliente y bastante más en una máquina sin ella. Si no puede —por ejemplo, sin red— no se cae: la
+API sigue en pie y el panel responde 503 diciendo el comando exacto que falta
+(`npm --prefix web install && npm --prefix web run build`).
+
+Si el puerto está ocupado, cámbialo con `PORT` o `BILLING_API_PORT` (tabla al final).
 
 | Qué | Dónde |
 | --- | --- |
@@ -39,6 +44,23 @@ Cobrix arranca vacío a propósito: lo primero que verás son estados vacíos qu
 5. Abre la corrida en el historial y **despliega cualquier cuota**: ahí está la traza de las
    reglas que se evaluaron y por qué terminó donde terminó. Es el punto diferencial de esta
    entrega; está explicado en la nota.
+
+   Donde mejor se ve es en las cuotas que **no** se importaron. Filtra por «Moneda incoherente» y
+   despliega la de JORGE CASTILLO —reporta USD con cuotas que son el 0,3 % de su plan—, o por
+   «Excluida por estado» y mira una de CARLOS ROJAS. La traza dice qué regla la descartó, con qué
+   números, y cuáles ya no se evaluaron.
+
+### Tres números de contratos, y los tres son correctos
+
+El panel muestra **21 contratos espejados «de 27 leídos»**, y una corrida de pagadas puede decir
+que consultó 19. No es una discrepancia:
+
+- **27** son todos los contratos que el administrador publica.
+- **21** son los que Cobrix guarda: los de los 20 clientes que sí se importaron. Los otros seis
+  titulares quedaron fuera por estado, moneda o falta de deuda, y el enunciado pide que no
+  existan como clientes.
+- **19** son los que una actualización de pagadas necesita consultar: solo los que todavía tienen
+  facturas abiertas.
 
 ### Para probar «Actualizar pagadas»
 
@@ -82,6 +104,11 @@ Qué cubren, de dentro hacia fuera:
 | `test/entorno.test.ts` | El entorno entregado: la API del administrador responde como está documentada |
 
 Ninguna prueba toca `data/billing-api.sqlite`: todas siembran su propia base temporal.
+
+> **No ejecutes `npm run seed`.** Está en `package.json` porque venía con el material entregado,
+> pero **borra y regenera `data/billing-api.sqlite` con el mes actual**, y con eso dejan de valer
+> todos los números de los criterios de aceptación. Si llega a pasar:
+> `git restore data/billing-api.sqlite`.
 
 ## Cómo está organizado
 
