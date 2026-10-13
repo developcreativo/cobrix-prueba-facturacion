@@ -12,11 +12,10 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { CONFIGURACION, ERROR_EJEMPLO, PRUEBA_CONEXION_ERROR, PRUEBA_CONEXION_OK } from '@/datos/ejemplo'
-import { fechaHora } from '@/lib/formato'
+import { ErrorDeApi, guardarConfiguracion, probarConexion, useRecurso } from '@/datos/api'
+import { usePanel } from '@/datos/panel'
 import { cn } from '@/lib/utils'
-import { useVista } from '@/lib/vista'
-import type { EstadoContrato, PruebaConexion, TipoDocumento } from '@/tipos/panel'
+import type { Configuracion, ErrorPanel, EstadoContrato, PruebaConexion, TipoDocumento } from '@/tipos/panel'
 
 /** Configuración (§3.1): empresa y proveedor, con las opciones de importación agrupadas. */
 
@@ -133,58 +132,143 @@ function Aviso({ tono, children }: { tono: 'ok' | 'bad'; children: ReactNode }) 
 	)
 }
 
+/** Texto del formulario a número, respetando «vacío = sin límite». */
+const aEnteroONulo = (valor: string): number | null => (valor.trim() === '' ? null : Math.trunc(Number(valor)))
+const aCentavosONulo = (valor: string): number | null => (valor.trim() === '' ? null : Math.round(Number(valor) * 100))
+
+interface Formulario {
+	readonly nombre: string
+	readonly rif: string
+	readonly correo: string
+	readonly nombreProveedor: string
+	readonly url: string
+	readonly usuario: string
+	readonly password: string
+	readonly estados: readonly string[]
+	readonly ventana: string
+	readonly recientes: string
+	readonly gracia: string
+	readonly topeFacturas: string
+	readonly topeMonto: string
+	readonly excluidos: readonly string[]
+	readonly autoActiva: boolean
+	readonly autoHora: string
+}
+
+const desdeConfiguracion = ({ empresa, proveedor }: Configuracion): Formulario => ({
+	nombre: empresa.nombre,
+	rif: empresa.rif,
+	correo: empresa.email_cobranza,
+	nombreProveedor: proveedor.nombre,
+	url: proveedor.api_url,
+	usuario: proveedor.usuario,
+	password: '',
+	estados: [...proveedor.estados_importables],
+	ventana: proveedor.ventana_meses === null ? 'sin' : String(proveedor.ventana_meses),
+	recientes: proveedor.max_cuotas_recientes === null ? '' : String(proveedor.max_cuotas_recientes),
+	gracia: String(proveedor.dias_gracia),
+	topeFacturas: proveedor.tope_facturas === null ? '' : String(proveedor.tope_facturas),
+	topeMonto: proveedor.tope_monto_centavos === null ? '' : String(proveedor.tope_monto_centavos / 100),
+	excluidos: [...proveedor.excluir_tipos_documento],
+	autoActiva: proveedor.auto_activa,
+	autoHora: proveedor.auto_hora ?? '03:00',
+})
+
 export function PaginaConfiguracion() {
-	const vista = useVista()
-	const { empresa, proveedor } = CONFIGURACION
+	const recurso = useRecurso<Configuracion>('/api/configuracion')
+	const panel = usePanel()
+	const configuracion = recurso.dato
 
-	const [nombre, setNombre] = useState(empresa.nombre)
-	const [rif, setRif] = useState(empresa.rif)
-	const [correo, setCorreo] = useState(empresa.email_cobranza)
+	// El formulario se siembra con lo guardado en cuanto llega, y se vuelve a sembrar si la
+	// configuración cambia por detrás (guardar devuelve la versión nueva).
+	const [sembrada, setSembrada] = useState<Configuracion | null>(null)
+	const [formulario, setFormulario] = useState<Formulario | null>(null)
+	if (configuracion !== null && configuracion !== sembrada) {
+		setSembrada(configuracion)
+		setFormulario(desdeConfiguracion(configuracion))
+	}
+	const cambiar = (parche: Partial<Formulario>): void => setFormulario(actual => (actual === null ? actual : { ...actual, ...parche }))
+
 	const [empresaGuardada, setEmpresaGuardada] = useState(false)
-
-	const [nombreProveedor, setNombreProveedor] = useState(proveedor.nombre)
-	const [url, setUrl] = useState(proveedor.api_url)
-	const [usuario, setUsuario] = useState(proveedor.usuario)
-	const [password, setPassword] = useState('')
-	const [estados, setEstados] = useState<string[]>([...proveedor.estados_importables])
-	const [ventana, setVentana] = useState(proveedor.ventana_meses === null ? 'sin' : String(proveedor.ventana_meses))
-	const [recientes, setRecientes] = useState(proveedor.max_cuotas_recientes === null ? '' : String(proveedor.max_cuotas_recientes))
-	const [gracia, setGracia] = useState(String(proveedor.dias_gracia))
-	const [topeFacturas, setTopeFacturas] = useState(proveedor.tope_facturas === null ? '' : String(proveedor.tope_facturas))
-	const [topeMonto, setTopeMonto] = useState(proveedor.tope_monto_centavos === null ? '' : String(proveedor.tope_monto_centavos / 100))
-	const [excluidos, setExcluidos] = useState<string[]>([...proveedor.excluir_tipos_documento])
-	const [autoActiva, setAutoActiva] = useState(proveedor.auto_activa)
-	const [autoHora, setAutoHora] = useState(proveedor.auto_hora ?? '03:00')
+	const [errorEmpresa, setErrorEmpresa] = useState<ErrorPanel | null>(null)
+	const [guardandoEmpresa, setGuardandoEmpresa] = useState(false)
 	const [proveedorGuardado, setProveedorGuardado] = useState(false)
+	const [errorProveedor, setErrorProveedor] = useState<ErrorPanel | null>(null)
+	const [guardandoProveedor, setGuardandoProveedor] = useState(false)
 	const [prueba, setPrueba] = useState<PruebaConexion | null>(null)
 	const [probando, setProbando] = useState(false)
 
-	const correoInvalido = correo.trim() !== '' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)
-	const sinEstados = estados.length === 0
+	const correoInvalido = formulario !== null && formulario.correo.trim() !== '' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(formulario.correo)
+	const sinEstados = formulario !== null && formulario.estados.length === 0
 
-	const alternar = (lista: string[], valor: string, activa: boolean): string[] =>
+	const alternar = (lista: readonly string[], valor: string, activa: boolean): string[] =>
 		activa ? [...lista, valor] : lista.filter(item => item !== valor)
 
-	const probarConexion = (): void => {
-		setProbando(true)
-		setPrueba(null)
-		// Demostración sin backend: una contraseña distinta de la del sandbox falla.
-		window.setTimeout(() => {
-			setPrueba(password === '' || password === 'cobrix-sandbox' ? PRUEBA_CONEXION_OK : PRUEBA_CONEXION_ERROR)
-			setProbando(false)
-		}, 450)
+	const alGuardar = (bloque: 'empresa' | 'proveedor'): void => {
+		if (formulario === null) return
+		const esEmpresa = bloque === 'empresa'
+		const marcarError = esEmpresa ? setErrorEmpresa : setErrorProveedor
+		const marcarGuardado = esEmpresa ? setEmpresaGuardada : setProveedorGuardado
+		const marcarEnCurso = esEmpresa ? setGuardandoEmpresa : setGuardandoProveedor
+
+		marcarError(null)
+		marcarGuardado(false)
+		marcarEnCurso(true)
+		guardarConfiguracion(
+			esEmpresa
+				? { empresa: { nombre: formulario.nombre, rif: formulario.rif, email_cobranza: formulario.correo } }
+				: {
+					proveedor: {
+						nombre: formulario.nombreProveedor,
+						api_url: formulario.url,
+						usuario: formulario.usuario,
+						// Vacía: se conserva la guardada. La contraseña entra y no sale.
+						...(formulario.password === '' ? {} : { password: formulario.password }),
+						estados_importables: formulario.estados as EstadoContrato[],
+						ventana_meses: formulario.ventana === 'sin' ? null : Number(formulario.ventana),
+						max_cuotas_recientes: aEnteroONulo(formulario.recientes),
+						dias_gracia: Math.trunc(Number(formulario.gracia || '0')),
+						tope_facturas: aEnteroONulo(formulario.topeFacturas),
+						tope_monto_centavos: aCentavosONulo(formulario.topeMonto),
+						excluir_tipos_documento: formulario.excluidos as TipoDocumento[],
+						auto_activa: formulario.autoActiva,
+						auto_hora: formulario.autoHora === '' ? null : formulario.autoHora,
+					},
+				},
+		)
+			.then(() => {
+				marcarGuardado(true)
+				if (!esEmpresa) cambiar({ password: '' })
+				recurso.recargar(true)
+				panel.recargar()
+			})
+			.catch((fallo: unknown) => marcarError(fallo instanceof ErrorDeApi ? fallo.detalle : null))
+			.finally(() => marcarEnCurso(false))
 	}
 
-	if (vista === 'error') {
+	/** Prueba lo que hay en el formulario, sin guardarlo. Nunca lanza: responde `ok: false`. */
+	const alProbar = (): void => {
+		if (formulario === null) return
+		setProbando(true)
+		setPrueba(null)
+		probarConexion({ api_url: formulario.url, usuario: formulario.usuario, ...(formulario.password === '' ? {} : { password: formulario.password }) })
+			.then(setPrueba)
+			.catch((fallo: unknown) => {
+				if (fallo instanceof ErrorDeApi) setPrueba({ ok: false, mensaje: fallo.detalle.mensaje, error: fallo.detalle })
+			})
+			.finally(() => setProbando(false))
+	}
+
+	if (recurso.error !== null) {
 		return (
 			<>
 				<EncabezadoPagina titulo="Configuración" />
-				<BloqueError error={ERROR_EJEMPLO} alReintentar={() => window.location.reload()} />
+				<BloqueError error={recurso.error} alReintentar={() => recurso.recargar()} />
 			</>
 		)
 	}
 
-	if (vista === 'cargando') {
+	if (configuracion === null || formulario === null) {
 		return (
 			<>
 				<EncabezadoPagina titulo="Configuración" />
@@ -195,6 +279,8 @@ export function PaginaConfiguracion() {
 			</>
 		)
 	}
+
+	const { empresa, proveedor } = configuracion
 
 	return (
 		<>
@@ -207,7 +293,7 @@ export function PaginaConfiguracion() {
 				<form
 					onSubmit={evento => {
 						evento.preventDefault()
-						if (!correoInvalido) setEmpresaGuardada(true)
+						if (!correoInvalido) alGuardar('empresa')
 					}}
 				>
 					<Card>
@@ -216,23 +302,24 @@ export function PaginaConfiguracion() {
 							<CardDescription>Quién cobra. Aparece en el pie del panel y en los correos de cobranza.</CardDescription>
 						</CardHeader>
 						<CardContent className="grid gap-4">
+							{errorEmpresa && <BloqueError error={errorEmpresa} titulo="No se guardó la empresa" />}
 							<div className="grid gap-4 md:grid-cols-3">
 								<Campo id="empresa-nombre" etiqueta="Nombre">
-									<Input id="empresa-nombre" value={nombre} onChange={evento => setNombre(evento.target.value)} required />
+									<Input id="empresa-nombre" value={formulario.nombre} onChange={evento => cambiar({ nombre: evento.target.value })} required />
 								</Campo>
 								<Campo id="empresa-rif" etiqueta="RIF" ayuda="Con o sin guiones: J-00000000-0">
-									<Input id="empresa-rif" value={rif} onChange={evento => setRif(evento.target.value)} aria-describedby="empresa-rif-ayuda" />
+									<Input id="empresa-rif" value={formulario.rif} onChange={evento => cambiar({ rif: evento.target.value })} aria-describedby="empresa-rif-ayuda" />
 								</Campo>
 								<Campo
 									id="empresa-correo"
 									etiqueta="Correo de cobranza"
-									error={correoInvalido ? 'Escribe un correo válido, por ejemplo cobranza@example.com' : undefined}
+									error={correoInvalido ? 'Escribe un formulario.correo válido, por ejemplo cobranza@example.com' : undefined}
 								>
 									<Input
 										id="empresa-correo"
 										type="email"
-										value={correo}
-										onChange={evento => setCorreo(evento.target.value)}
+										value={formulario.correo}
+										onChange={evento => cambiar({ correo: evento.target.value })}
 										aria-invalid={correoInvalido}
 										aria-describedby={correoInvalido ? 'empresa-correo-error' : undefined}
 									/>
@@ -243,7 +330,9 @@ export function PaginaConfiguracion() {
 								<strong className="font-medium text-foreground">{empresa.moneda}</strong>. Toda la plata de la integración es {empresa.moneda}.
 							</p>
 							<div className="flex flex-wrap items-center gap-3">
-								<Button type="submit">Guardar empresa</Button>
+								<Button type="submit" disabled={guardandoEmpresa}>
+									{guardandoEmpresa ? 'Guardando…' : 'Guardar empresa'}
+								</Button>
 								<span aria-live="polite" className="text-sm text-ok">
 									{empresaGuardada && 'Datos de la empresa guardados.'}
 								</span>
@@ -255,7 +344,7 @@ export function PaginaConfiguracion() {
 				<form
 					onSubmit={evento => {
 						evento.preventDefault()
-						if (!sinEstados) setProveedorGuardado(true)
+						if (!sinEstados) alGuardar('proveedor')
 					}}
 				>
 					<Card>
@@ -263,13 +352,15 @@ export function PaginaConfiguracion() {
 							<CardTitle>Administrador de facturas</CardTitle>
 							<CardDescription>De dónde salen los contratos y las cuotas, y con qué reglas se importan.</CardDescription>
 							<CardAction>
-								<Button type="button" variant="outline" onClick={probarConexion} disabled={probando}>
+								<Button type="button" variant="outline" onClick={alProbar} disabled={probando}>
 									<PlugZap aria-hidden="true" />
 									{probando ? 'Probando…' : 'Probar conexión'}
 								</Button>
 							</CardAction>
 						</CardHeader>
 						<CardContent className="grid gap-5">
+							{errorProveedor && <BloqueError error={errorProveedor} titulo="No se guardó la configuración" />}
+
 							<div aria-live="polite" className="empty:hidden">
 								{probando && <p className="text-sm text-muted-foreground">Iniciando sesión en el administrador de facturas…</p>}
 								{!probando && prueba?.ok && <Aviso tono="ok">{prueba.mensaje}</Aviso>}
@@ -282,34 +373,38 @@ export function PaginaConfiguracion() {
 
 							<div className="grid gap-4 md:grid-cols-3">
 								<Campo id="proveedor-nombre" etiqueta="Nombre visible">
-									<Input id="proveedor-nombre" value={nombreProveedor} onChange={evento => setNombreProveedor(evento.target.value)} />
+									<Input id="proveedor-nombre" value={formulario.nombreProveedor} onChange={evento => cambiar({ nombreProveedor: evento.target.value })} />
 								</Campo>
-								<Campo id="proveedor-url" etiqueta="URL de la API" ayuda="Con o sin /api/v1. El simulador local es http://127.0.0.1:4310">
+								<Campo id="proveedor-url" etiqueta="URL de la API" ayuda="Con o sin /api/v1. El simulador local es http://127.0.0.1:4310/api/v1">
 									<Input
 										id="proveedor-url"
-										type="url"
-										value={url}
-										onChange={evento => setUrl(evento.target.value)}
+										type="formulario.url"
+										value={formulario.url}
+										onChange={evento => cambiar({ url: evento.target.value })}
 										aria-describedby="proveedor-url-ayuda"
 										className="font-mono text-[0.8rem]"
 									/>
 								</Campo>
 								<Campo id="proveedor-usuario" etiqueta="Usuario o correo">
-									<Input id="proveedor-usuario" value={usuario} onChange={evento => setUsuario(evento.target.value)} autoComplete="username" />
+									<Input id="proveedor-usuario" value={formulario.usuario} onChange={evento => cambiar({ usuario: evento.target.value })} autoComplete="username" />
 								</Campo>
 								<Campo id="proveedor-password" etiqueta="Contraseña" ayuda="Déjala vacía para conservar la actual. Nunca se muestra.">
 									<Input
 										id="proveedor-password"
-										type="password"
-										value={password}
-										placeholder="••••••••"
-										onChange={evento => setPassword(evento.target.value)}
-										autoComplete="current-password"
+										type="formulario.password"
+										value={formulario.password}
+										placeholder={proveedor.password_definida ? '••••••••' : 'Escribe la contraseña del proveedor'}
+										onChange={evento => cambiar({ password: evento.target.value })}
+										autoComplete="current-formulario.password"
 										aria-describedby="proveedor-password-ayuda"
 									/>
 								</Campo>
 								<div className="flex items-start pt-7">
-									{proveedor.password_definida ? <Pildora tono="ok">Hay una contraseña guardada</Pildora> : <Pildora tono="warn">Sin contraseña</Pildora>}
+									{proveedor.password_definida ? (
+										<Pildora tono="ok">Hay una contraseña guardada</Pildora>
+									) : (
+										<Pildora tono="warn">Sin contraseña: la corrida no arranca</Pildora>
+									)}
 								</div>
 							</div>
 
@@ -317,14 +412,14 @@ export function PaginaConfiguracion() {
 								leyenda="Estados de contrato que se importan"
 								ayuda="Por defecto ACTIVO y CORTADO. Las cuotas de un contrato en otro estado salen como «Excluida por estado»."
 								opciones={ESTADOS}
-								seleccionadas={estados}
-								alCambiar={(valor, activa) => setEstados(lista => alternar(lista, valor, activa))}
+								seleccionadas={formulario.estados}
+								alCambiar={(valor, activa) => cambiar({ estados: alternar(formulario.estados, valor, activa) })}
 								error={sinEstados ? 'Elige al menos un estado: con la lista vacía no se importaría nada.' : undefined}
 							/>
 
 							<div className="grid gap-4 md:grid-cols-3">
 								<Campo id="ventana" etiqueta="Ventana de importación" ayuda="Solo cuotas desde el mes actual menos N meses.">
-									<Select value={ventana} onValueChange={setVentana}>
+									<Select value={formulario.ventana} onValueChange={valor => cambiar({ ventana: valor })}>
 										<SelectTrigger id="ventana" className="w-full">
 											<SelectValue />
 										</SelectTrigger>
@@ -343,9 +438,9 @@ export function PaginaConfiguracion() {
 										type="number"
 										min={1}
 										max={60}
-										value={recientes}
+										value={formulario.recientes}
 										placeholder="todas"
-										onChange={evento => setRecientes(evento.target.value)}
+										onChange={evento => cambiar({ recientes: evento.target.value })}
 										aria-describedby="recientes-ayuda"
 									/>
 								</Campo>
@@ -355,8 +450,8 @@ export function PaginaConfiguracion() {
 										type="number"
 										min={0}
 										max={60}
-										value={gracia}
-										onChange={evento => setGracia(evento.target.value)}
+										value={formulario.gracia}
+										onChange={evento => cambiar({ gracia: evento.target.value })}
 										aria-describedby="gracia-ayuda"
 									/>
 								</Campo>
@@ -365,9 +460,9 @@ export function PaginaConfiguracion() {
 										id="tope-facturas"
 										type="number"
 										min={1}
-										value={topeFacturas}
+										value={formulario.topeFacturas}
 										placeholder="sin tope"
-										onChange={evento => setTopeFacturas(evento.target.value)}
+										onChange={evento => cambiar({ topeFacturas: evento.target.value })}
 										aria-describedby="tope-facturas-ayuda"
 									/>
 								</Campo>
@@ -377,9 +472,9 @@ export function PaginaConfiguracion() {
 										type="number"
 										min={0}
 										step="0.01"
-										value={topeMonto}
+										value={formulario.topeMonto}
 										placeholder="sin tope"
-										onChange={evento => setTopeMonto(evento.target.value)}
+										onChange={evento => cambiar({ topeMonto: evento.target.value })}
 										aria-describedby="tope-monto-ayuda"
 									/>
 								</Campo>
@@ -389,15 +484,15 @@ export function PaginaConfiguracion() {
 								leyenda="Excluir por tipo de documento del titular"
 								ayuda="J y G son personas jurídicas; el resto, naturales."
 								opciones={TIPOS}
-								seleccionadas={excluidos}
-								alCambiar={(valor, activa) => setExcluidos(lista => alternar(lista, valor, activa))}
+								seleccionadas={formulario.excluidos}
+								alCambiar={(valor, activa) => cambiar({ excluidos: alternar(formulario.excluidos, valor, activa) })}
 							/>
 
 							<fieldset className="grid gap-3 rounded-lg border border-border px-3.5 py-3">
 								<legend className="px-1 text-sm font-medium">Corrida automática</legend>
 								<div className="flex flex-wrap items-center gap-x-6 gap-y-3">
 									<div className="flex items-center gap-2.5">
-										<Switch id="auto-activa" checked={autoActiva} onCheckedChange={setAutoActiva} />
+										<Switch id="auto-activa" checked={formulario.autoActiva} onCheckedChange={valor => cambiar({ autoActiva: valor })} />
 										<Label htmlFor="auto-activa" className="font-normal">
 											Importar y actualizar pagadas una vez al día
 										</Label>
@@ -409,9 +504,9 @@ export function PaginaConfiguracion() {
 										<Input
 											id="auto-hora"
 											type="time"
-											value={autoHora}
-											disabled={!autoActiva}
-											onChange={evento => setAutoHora(evento.target.value)}
+											value={formulario.autoHora}
+											disabled={!formulario.autoActiva}
+											onChange={evento => cambiar({ autoHora: evento.target.value })}
 											className="w-32"
 										/>
 										<span className="text-sm text-muted-foreground">({empresa.zona_horaria})</span>
@@ -423,8 +518,9 @@ export function PaginaConfiguracion() {
 							</fieldset>
 
 							<div className="flex flex-wrap items-center gap-3">
-								<Button type="submit">Guardar proveedor</Button>
-								<span className="text-sm text-muted-foreground">Última modificación: {fechaHora(proveedor.actualizado_en)}</span>
+								<Button type="submit" disabled={guardandoProveedor}>
+									{guardandoProveedor ? 'Guardando…' : 'Guardar proveedor'}
+								</Button>
 								<span aria-live="polite" className="text-sm text-ok">
 									{proveedorGuardado && 'Configuración del proveedor guardada.'}
 								</span>

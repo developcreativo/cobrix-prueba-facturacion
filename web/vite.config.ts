@@ -16,7 +16,9 @@ export default defineConfig({
 	server: {
 		port: 5173,
 		proxy: {
-			'/api': { target: 'http://127.0.0.1:4300', changeOrigin: true },
+			// `COBRIX_API` apunta el proxy a otra instancia (por ejemplo, una con su propia base
+			// para pruebas) sin tocar este archivo.
+			'/api': { target: process.env.COBRIX_API ?? 'http://127.0.0.1:4300', changeOrigin: true },
 		},
 	},
 })

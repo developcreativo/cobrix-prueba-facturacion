@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
-	PROVEEDOR_POR_DEFECTO, validarEmpresa, validarProveedor, type Proveedor,
+	PROVEEDOR_POR_DEFECTO, urlDelAdministrador, validarEmpresa, validarProveedor, type Proveedor,
 } from '../src/cobrix/dominio/configuracion.ts'
 
 const proveedor = (cambios: Partial<Proveedor> = {}): Proveedor => ({ ...PROVEEDOR_POR_DEFECTO, ...cambios })
@@ -26,6 +26,17 @@ describe('valores por defecto del proveedor', () => {
 
 	it('la configuración por defecto es válida', () => {
 		assert.deepEqual(validarProveedor(PROVEEDOR_POR_DEFECTO), [])
+	})
+
+	it('la URL del administrador se compone con el puerto donde se levanta, no es una constante', () => {
+		// Quien arranca el entorno aislado con BILLING_API_PORT=4330 no debe empezar con el panel
+		// apuntando al 4310: «Probar conexión» tardaría cuatro segundos para decir «fetch failed».
+		assert.equal(urlDelAdministrador('4330'), 'http://127.0.0.1:4330/api/v1')
+		assert.equal(urlDelAdministrador(undefined), 'http://127.0.0.1:4310/api/v1', 'sin variable, el puerto de siempre')
+		assert.equal(urlDelAdministrador('nada-de-esto'), 'http://127.0.0.1:4310/api/v1', 'un valor raro no construye una URL inválida')
+		assert.equal(urlDelAdministrador(''), 'http://127.0.0.1:4310/api/v1')
+		assert.equal(PROVEEDOR_POR_DEFECTO.apiUrl, urlDelAdministrador(), 'el valor por defecto usa la misma composición')
+		assert.deepEqual(validarProveedor(proveedor({ apiUrl: urlDelAdministrador('4330') })), [])
 	})
 })
 

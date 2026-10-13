@@ -77,7 +77,7 @@ export function evaluarPago(factura: FacturaAbierta, filas: readonly FilaLibro[]
 				[...traza, pasoDescarta('factura del ISP que cobró', 'todas las filas vienen con id_factura 0')]))
 		}
 		return decidido(veredicto('marcada_pagada',
-			`El ISP la cobró completa: ${usd(primera.valorPago)} con la factura ${cobro.facturaIspNum} del ${cobro.fecha}.`,
+			`El ISP la cobró completa con su factura ${cobro.facturaIspNum} del ${cobro.fecha}: ${usd(primera.valorPago)} pagados sobre la cuota, que cubren los ${usd(factura.saldo)} que Cobrix tenía abiertos.`,
 			[...traza, pasoOk('evidencia de pago', `saldo 0 y ${usd(primera.valorPago)} pagados según la factura ${cobro.facturaIspNum}`)],
 			cobro))
 	}

@@ -10,9 +10,16 @@
  *    siendo explicable después de cambiar la configuración.
  *  - `corrida_linea.traza` guarda las reglas evaluadas en orden, que es lo que el panel
  *    muestra para explicar cada cuota.
+ *  - `corrida_linea.titular_*` y `cliente.identificacion_bruta` guardan lo que el ADMINISTRADOR
+ *    dijo. Las líneas de contratos que no se importan no tienen cliente en Cobrix, así que sin el
+ *    nombre el detalle de la corrida sería ilegible para un cobrador; y el «documento» que se
+ *    muestra en pantalla debe ser el del ISP (`V-12345678`), no la clave normalizada.
+ *
+ * Las migraciones son aditivas y se aplican solas al abrir (`MIGRACIONES`): una base vieja sigue
+ * sirviendo y nadie tiene que borrar nada a mano.
  */
 
-export const VERSION_ESQUEMA = 1
+export const VERSION_ESQUEMA = 2
 
 export const ESQUEMA = `
 CREATE TABLE IF NOT EXISTS empresa (
@@ -45,6 +52,8 @@ CREATE TABLE IF NOT EXISTS cliente (
 	tipo_documento TEXT,
 	numero TEXT NOT NULL,
 	nombre TEXT NOT NULL,
+	-- Identificación tal como la publica el administrador: se muestra como «documento».
+	identificacion_bruta TEXT NOT NULL DEFAULT '',
 	persona TEXT NOT NULL CHECK (persona IN ('natural','juridica')),
 	email TEXT,
 	telefono TEXT,
@@ -104,6 +113,9 @@ CREATE TABLE IF NOT EXISTS corrida_linea (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	corrida_id INTEGER NOT NULL REFERENCES corrida(id),
 	contrato_id INTEGER,
+	-- El acta: quién era el titular según el administrador, aunque no sea cliente de Cobrix.
+	titular_nombre TEXT,
+	titular_identificacion TEXT,
 	deuda_id TEXT,
 	periodo TEXT,
 	monto INTEGER NOT NULL DEFAULT 0,
@@ -138,3 +150,14 @@ CREATE INDEX IF NOT EXISTS contrato_cliente ON contrato(cliente_id);
 CREATE INDEX IF NOT EXISTS linea_corrida ON corrida_linea(corrida_id, resultado);
 CREATE INDEX IF NOT EXISTS evento_cliente ON evento(cliente_id, ocurrido_en);
 `
+
+/**
+ * Columnas añadidas después de la primera versión. Se aplican en orden y se ignora el error de
+ * «duplicate column name», que es la forma que tiene SQLite de decir «ya estaba»: así abrir una
+ * base vieja la pone al día sin perder una fila.
+ */
+export const MIGRACIONES: readonly string[] = [
+	`ALTER TABLE cliente ADD COLUMN identificacion_bruta TEXT NOT NULL DEFAULT ''`,
+	'ALTER TABLE corrida_linea ADD COLUMN titular_nombre TEXT',
+	'ALTER TABLE corrida_linea ADD COLUMN titular_identificacion TEXT',
+]

@@ -7,13 +7,12 @@ import { Codigo, Dato, EncabezadoPagina, ListaDeDatos, RejillaDatos, Seccion, Sk
 import { FilaDecision } from '@/components/traza-decision'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { corridaPorId } from '@/datos/ejemplo'
+import { useRecurso } from '@/datos/api'
 import { NOMBRE_CORRIDA } from '@/lib/corridas'
 import { duracion, entero, fechaHora, lista, usd } from '@/lib/formato'
 import { CLASES_TONO, etiquetaResultado, tonoResultado } from '@/lib/resultados'
 import { cn } from '@/lib/utils'
-import { useVista } from '@/lib/vista'
-import type { Contador, Resultado } from '@/tipos/panel'
+import type { Contador, CorridaDetalle, Resultado } from '@/tipos/panel'
 
 /** Un número de la corrida: entero o dinero, según lo que diga el contador. */
 const valorContador = (contador: Contador): string => (contador.tipo === 'dinero' ? usd(contador.valor) : entero(contador.valor))
@@ -41,7 +40,9 @@ function desglosar(contadores: readonly Contador[]): { readonly unidad: string; 
 		const resultado = contador.clave.slice(punto + 1)
 		const previo = porResultado.get(resultado) ?? {
 			resultado,
-			etiqueta: contador.etiqueta,
+			// La API sufija la etiqueta con la unidad («Importada (cuotas)»); aquí la unidad ya
+			// es la columna, así que el sufijo sobra.
+			etiqueta: contador.etiqueta.replace(/\s*\((cuotas|líneas)\)$/, ''),
 			clave: contador.clave,
 			unidades: 0,
 			filas: 0,
@@ -53,14 +54,16 @@ function desglosar(contadores: readonly Contador[]): { readonly unidad: string; 
 			porResultado.set(resultado, { ...previo, unidades: contador.valor, clave: contador.clave })
 		}
 	}
-	return { unidad, filas: [...porResultado.values()].sort((a, b) => b.unidades - a.unidades || b.filas - a.filas) }
+	// La API solo publica `lineas.X` cuando difiere de las cuotas: donde no viene, coinciden.
+	const filas = [...porResultado.values()].map(fila => (fila.filas === 0 ? { ...fila, filas: fila.unidades } : fila))
+	return { unidad, filas: filas.sort((a, b) => b.unidades - a.unidades || b.filas - a.filas) }
 }
 
 /** Detalle de una corrida (§3.4): contadores y una fila por cuota, con su traza desplegable. */
 export function PaginaCorrida() {
 	const { id } = useParams()
-	const vista = useVista()
-	const corrida = corridaPorId(Number(id))
+	const recurso = useRecurso<CorridaDetalle>(`/api/corridas/${encodeURIComponent(id ?? '')}`)
+	const corrida = recurso.dato
 	const [filtro, setFiltro] = useState<Resultado | 'todos'>('todos')
 
 	const resultados = useMemo(() => {
@@ -69,17 +72,40 @@ export function PaginaCorrida() {
 		return [...cuenta.entries()].sort((a, b) => b[1] - a[1])
 	}, [corrida])
 
-	if (!corrida) {
+	if (recurso.error?.codigo === 'corrida_no_encontrada') {
 		return (
 			<>
 				<EncabezadoPagina titulo="Corrida no encontrada" volver={{ a: '/sincronizacion', etiqueta: 'Sincronización' }} />
 				<Card>
 					<EstadoVacio
 						titulo="Esa corrida no existe"
-						descripcion="Puede que se haya borrado con los datos importados. Vuelve al historial y elige otra."
+						descripcion={recurso.error.mensaje}
 						accion={{ a: '/sincronizacion', etiqueta: 'Ver el historial' }}
 					/>
 				</Card>
+			</>
+		)
+	}
+
+	if (recurso.error !== null) {
+		return (
+			<>
+				<EncabezadoPagina titulo="Corrida" volver={{ a: '/sincronizacion', etiqueta: 'Sincronización' }} />
+				<BloqueError error={recurso.error} alReintentar={() => recurso.recargar()} />
+			</>
+		)
+	}
+
+	if (corrida === null) {
+		return (
+			<>
+				<EncabezadoPagina titulo="Corrida" volver={{ a: '/sincronizacion', etiqueta: 'Sincronización' }} />
+				<div className="grid gap-5">
+					<SkeletonTarjetas cantidad={4} />
+					<Card className="p-4">
+						<SkeletonTabla filas={8} />
+					</Card>
+				</div>
 			</>
 		)
 	}
@@ -123,163 +149,152 @@ export function PaginaCorrida() {
 
 				{corrida.error && <BloqueError error={corrida.error} titulo="La corrida falló" />}
 
-				{vista === 'cargando' ? (
-					<>
-						<SkeletonTarjetas cantidad={6} />
-						<Card className="p-4">
-							<SkeletonTabla filas={8} />
-						</Card>
-					</>
-				) : (
-					<>
-						<RejillaDatos className="lg:grid-cols-6">
-							{destacados.map(contador => (
-								<TarjetaDato key={contador.clave} etiqueta={contador.etiqueta} valor={valorContador(contador)} />
-							))}
-						</RejillaDatos>
+				<RejillaDatos className="lg:grid-cols-4">
+					{destacados.map(contador => (
+						<TarjetaDato key={contador.clave} etiqueta={contador.etiqueta} valor={valorContador(contador)} />
+					))}
+				</RejillaDatos>
 
-						<Seccion
-							titulo="Contadores"
-							descripcion="Con el nombre que usan por dentro, para poder cruzarlos con los registros de la corrida."
-							id="contadores"
-						>
-							<ul className="grid">
-								{totales.map(contador => (
-									<li
-										key={contador.clave}
-										className="flex items-baseline justify-between gap-3 border-b border-border px-3 py-2 text-sm last:border-0 md:px-4"
-									>
-										<span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-											<span>{contador.etiqueta}</span>
-											<Codigo>{contador.clave}</Codigo>
-										</span>
-										<span className="tabular font-medium">{valorContador(contador)}</span>
-									</li>
+				<Seccion
+					titulo="Contadores"
+					descripcion="Con el nombre que usan por dentro, para poder cruzarlos con los registros de la corrida."
+					id="contadores"
+				>
+					<ul className="grid">
+						{totales.map(contador => (
+							<li
+								key={contador.clave}
+								className="flex items-baseline justify-between gap-3 border-b border-border px-3 py-2 text-sm last:border-0 md:px-4"
+							>
+								<span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+									<span>{contador.etiqueta}</span>
+									<Codigo>{contador.clave}</Codigo>
+								</span>
+								<span className="tabular font-medium">{valorContador(contador)}</span>
+							</li>
+						))}
+					</ul>
+				</Seccion>
+
+				{desglose.filas.length > 0 && (
+					<Seccion
+						titulo="Por resultado"
+						descripcion={`«${desglose.unidad}» cuenta ${desglose.unidad === 'Facturas' ? 'facturas de Cobrix' : 'cuotas del administrador'}; «filas» cuenta las líneas del detalle de abajo. No siempre coinciden: cuando se descarta un contrato entero, una sola fila resume varias cuotas.`}
+						id="desglose"
+					>
+						<div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4.5rem] items-baseline gap-x-3 border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground md:px-4">
+							<span>Resultado</span>
+							<span className="text-right">{desglose.unidad}</span>
+							<span className="text-right">Filas</span>
+						</div>
+						<ul className="grid">
+							{desglose.filas.map(fila => (
+								<li
+									key={fila.resultado}
+									className="grid grid-cols-[minmax(0,1fr)_4.5rem_4.5rem] items-baseline gap-x-3 border-b border-border px-3 py-2 text-sm last:border-0 md:px-4"
+								>
+									<span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+										<span>{fila.etiqueta}</span>
+										<Codigo>{fila.clave}</Codigo>
+									</span>
+									<span className="tabular text-right font-medium">{entero(fila.unidades)}</span>
+									<span className="tabular text-right text-muted-foreground">{entero(fila.filas)}</span>
+								</li>
+							))}
+						</ul>
+					</Seccion>
+				)}
+
+				<Seccion
+					titulo="Detalle, fila por fila"
+					descripcion="Casi siempre una fila es una cuota. Despliega cualquiera para ver las reglas que se evaluaron, en orden, y por qué terminó así."
+					id="detalle"
+					nota={`${entero(corrida.lineas.length)} filas · ${entero(cuotasClasificadas)} cuotas del administrador · ${usd(montoClasificado)} en juego. Los filtros cuentan filas.`}
+					accion={
+						<div className="flex flex-wrap items-center gap-1.5">
+							<Button
+								variant={filtro === 'todos' ? 'secondary' : 'ghost'}
+								size="xs"
+								aria-pressed={filtro === 'todos'}
+								onClick={() => setFiltro('todos')}
+							>
+								Todas ({entero(corrida.lineas.length)})
+							</Button>
+							{resultados.map(([resultado, cantidad]) => (
+								<Button
+									key={resultado}
+									variant="ghost"
+									size="xs"
+									aria-pressed={filtro === resultado}
+									onClick={() => setFiltro(resultado)}
+									className={cn('border border-transparent', filtro === resultado && CLASES_TONO[tonoResultado(resultado)])}
+								>
+									{etiquetaResultado(resultado, corrida.simulacion)} ({entero(cantidad)})
+								</Button>
+							))}
+						</div>
+					}
+				>
+					{corrida.lineas.length === 0 ? (
+						<EstadoVacio
+							titulo="Esta corrida no clasificó ninguna cuota"
+							descripcion="Falló antes de leer los contratos, así que no hay decisiones que explicar. Arregla el error de arriba y vuelve a lanzarla."
+							accion={{ a: '/sincronizacion', etiqueta: 'Volver a Sincronización' }}
+						/>
+					) : lineas.length === 0 ? (
+						<EstadoVacio titulo="Ninguna fila con ese resultado" descripcion="Quita el filtro para ver todas las cuotas de la corrida." />
+					) : (
+						<>
+							<div
+								className="hidden grid-cols-[1.25rem_10rem_minmax(0,1fr)_6rem_auto_6.5rem] items-center gap-x-2 border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground md:grid"
+								aria-hidden="true"
+							>
+								<span />
+								<span>Contrato · cuota</span>
+								<span>Cliente</span>
+								<span>Periodo</span>
+								<span>Resultado</span>
+								<span className="text-right">Monto</span>
+							</div>
+							<ul>
+								{lineas.map(linea => (
+									<FilaDecision key={`${linea.id}-${linea.deuda_id}`} linea={linea} tipo={corrida.tipo} simulacion={corrida.simulacion} />
 								))}
 							</ul>
-						</Seccion>
+						</>
+					)}
+				</Seccion>
 
-						{desglose.filas.length > 0 && (
-							<Seccion
-								titulo="Por resultado"
-								descripcion={`«${desglose.unidad}» cuenta ${desglose.unidad === 'Facturas' ? 'facturas de Cobrix' : 'cuotas del administrador'}; «filas» cuenta las líneas del detalle de abajo. No siempre coinciden: cuando se descarta un contrato entero, una sola fila resume varias cuotas.`}
-								id="desglose"
-							>
-								<div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4.5rem] items-baseline gap-x-3 border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground md:px-4">
-									<span>Resultado</span>
-									<span className="text-right">{desglose.unidad}</span>
-									<span className="text-right">Filas</span>
-								</div>
-								<ul className="grid">
-									{desglose.filas.map(fila => (
-										<li
-											key={fila.resultado}
-											className="grid grid-cols-[minmax(0,1fr)_4.5rem_4.5rem] items-baseline gap-x-3 border-b border-border px-3 py-2 text-sm last:border-0 md:px-4"
-										>
-											<span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-												<span>{fila.etiqueta}</span>
-												<Codigo>{fila.clave}</Codigo>
-											</span>
-											<span className="tabular text-right font-medium">{entero(fila.unidades)}</span>
-											<span className="tabular text-right text-muted-foreground">{entero(fila.filas)}</span>
-										</li>
+				<Seccion titulo="Configuración con la que corrió" descripcion="Una corrida vieja se sigue explicando aunque la configuración cambie después.">
+					<div className="p-4">
+						<ListaDeDatos>
+							<Dato etiqueta="Estados importables">
+								<span className="flex flex-wrap gap-1.5">
+									{corrida.config_snapshot.estados_importables.map(estado => (
+										<Pildora key={estado} tono="info" conIcono={false}>
+											{estado}
+										</Pildora>
 									))}
-								</ul>
-							</Seccion>
-						)}
-
-						<Seccion
-							titulo="Detalle, fila por fila"
-							descripcion="Casi siempre una fila es una cuota. Despliega cualquiera para ver las reglas que se evaluaron, en orden, y por qué terminó así."
-							id="detalle"
-							nota={`${entero(corrida.lineas.length)} filas · ${entero(cuotasClasificadas)} cuotas del administrador · ${usd(montoClasificado)} en juego. Los filtros cuentan filas.`}
-							accion={
-								<div className="flex flex-wrap items-center gap-1.5">
-									<Button
-										variant={filtro === 'todos' ? 'secondary' : 'ghost'}
-										size="xs"
-										aria-pressed={filtro === 'todos'}
-										onClick={() => setFiltro('todos')}
-									>
-										Todas ({entero(corrida.lineas.length)})
-									</Button>
-									{resultados.map(([resultado, cantidad]) => (
-										<Button
-											key={resultado}
-											variant="ghost"
-											size="xs"
-											aria-pressed={filtro === resultado}
-											onClick={() => setFiltro(resultado)}
-											className={cn('border border-transparent', filtro === resultado && CLASES_TONO[tonoResultado(resultado)])}
-										>
-											{etiquetaResultado(resultado, corrida.simulacion)} ({entero(cantidad)})
-										</Button>
-									))}
-								</div>
-							}
-						>
-							{corrida.lineas.length === 0 ? (
-								<EstadoVacio
-									titulo="Esta corrida no clasificó ninguna cuota"
-									descripcion="Falló antes de leer los contratos, así que no hay decisiones que explicar. Arregla el error de arriba y vuelve a lanzarla."
-									accion={{ a: '/sincronizacion', etiqueta: 'Volver a Sincronización' }}
-								/>
-							) : lineas.length === 0 ? (
-								<EstadoVacio titulo="Ninguna fila con ese resultado" descripcion="Quita el filtro para ver todas las cuotas de la corrida." />
-							) : (
-								<>
-									<div
-										className="hidden grid-cols-[1.25rem_10rem_minmax(0,1fr)_6rem_auto_6.5rem] items-center gap-x-2 border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground md:grid"
-										aria-hidden="true"
-									>
-										<span />
-										<span>Contrato · cuota</span>
-										<span>Cliente</span>
-										<span>Periodo</span>
-										<span>Resultado</span>
-										<span className="text-right">Monto</span>
-									</div>
-									<ul>
-										{lineas.map(linea => (
-											<FilaDecision key={`${linea.id}-${linea.deuda_id}`} linea={linea} tipo={corrida.tipo} simulacion={corrida.simulacion} />
-										))}
-									</ul>
-								</>
-							)}
-						</Seccion>
-
-						<Seccion titulo="Configuración con la que corrió" descripcion="Una corrida vieja se sigue explicando aunque la configuración cambie después.">
-							<div className="p-4">
-								<ListaDeDatos>
-									<Dato etiqueta="Estados importables">
-										<span className="flex flex-wrap gap-1.5">
-											{corrida.config_snapshot.estados_importables.map(estado => (
-												<Pildora key={estado} tono="info" conIcono={false}>
-													{estado}
-												</Pildora>
-											))}
-										</span>
-									</Dato>
-									<Dato etiqueta="Ventana de importación">
-										{corrida.config_snapshot.ventana_meses === null ? 'Sin ventana' : `${corrida.config_snapshot.ventana_meses} meses`}
-									</Dato>
-									<Dato etiqueta="Máx. cuotas recientes">
-										{corrida.config_snapshot.max_cuotas_recientes === null ? 'Todas' : corrida.config_snapshot.max_cuotas_recientes}
-									</Dato>
-									<Dato etiqueta="Días de gracia">{corrida.config_snapshot.dias_gracia}</Dato>
-									<Dato etiqueta="Topes por corrida">
-										{corrida.config_snapshot.tope_facturas === null && corrida.config_snapshot.tope_monto_centavos === null
-											? 'Sin topes'
-											: `${corrida.config_snapshot.tope_facturas ?? '—'} facturas · ${usd(corrida.config_snapshot.tope_monto_centavos)}`}
-									</Dato>
-									<Dato etiqueta="Tipos de documento excluidos">
-										{lista([...corrida.config_snapshot.excluir_tipos_documento], 'ninguno')}
-									</Dato>
-								</ListaDeDatos>
-							</div>
-						</Seccion>
-					</>
-				)}
+								</span>
+							</Dato>
+							<Dato etiqueta="Ventana de importación">
+								{corrida.config_snapshot.ventana_meses === null ? 'Sin ventana' : `${corrida.config_snapshot.ventana_meses} meses`}
+							</Dato>
+							<Dato etiqueta="Máx. cuotas recientes">
+								{corrida.config_snapshot.max_cuotas_recientes === null ? 'Todas' : corrida.config_snapshot.max_cuotas_recientes}
+							</Dato>
+							<Dato etiqueta="Días de gracia">{corrida.config_snapshot.dias_gracia}</Dato>
+							<Dato etiqueta="Topes por corrida">
+								{corrida.config_snapshot.tope_facturas === null && corrida.config_snapshot.tope_monto_centavos === null
+									? 'Sin topes'
+									: `${corrida.config_snapshot.tope_facturas ?? '—'} facturas · ${usd(corrida.config_snapshot.tope_monto_centavos)}`}
+							</Dato>
+							<Dato etiqueta="Tipos de documento excluidos">
+								{lista([...corrida.config_snapshot.excluir_tipos_documento], 'ninguno')}
+							</Dato>
+						</ListaDeDatos>
+					</div>
+				</Seccion>
 			</div>
 		</>
 	)

@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
-import { CONFIGURACION, corridaPorId } from '@/datos/ejemplo'
+import { ErrorDeApi, lanzarCorrida, obtener, seguirCorrida } from '@/datos/api'
 import { entero, lista, usd } from '@/lib/formato'
 import { describir, etiquetaResultado } from '@/lib/resultados'
-import type { CorridaDetalle, LineaCorrida, ProgresoCorrida, Resultado, TipoCorrida } from '@/tipos/panel'
+import type { CorridaDetalle, ErrorPanel, LineaCorrida, Proveedor, ProgresoCorrida, Resultado, TipoCorrida } from '@/tipos/panel'
 
 /**
  * Lanzar una corrida: confirmación y consola en vivo (SPEC §5.3).
@@ -18,9 +18,8 @@ import type { CorridaDetalle, LineaCorrida, ProgresoCorrida, Resultado, TipoCorr
  * La corrida **real** pide confirmación y dice exactamente qué va a pasar; la **simulación**
  * arranca sin preguntar, porque no escribe nada.
  *
- * La consola de abajo es el hueco del progreso en vivo: hoy se alimenta de los datos de
- * ejemplo con un temporizador; cuando exista `GET /api/corridas/:id/stream` (SSE) solo cambia
- * el origen de los eventos `ProgresoCorrida`, no la pantalla.
+ * El progreso viene de `GET /api/corridas/:id/stream` (SSE), que emite `ProgresoCorrida` a
+ * medida que la corrida avanza contrato a contrato.
  */
 
 export interface Peticion {
@@ -33,55 +32,126 @@ const NOMBRE_TIPO: Record<TipoCorrida, string> = {
 	pagadas: 'Actualizar facturas pagadas',
 }
 
-/** Corrida de ejemplo que alimenta la consola según lo que se haya pedido. */
-const corridaDeEjemplo = (peticion: Peticion): CorridaDetalle | undefined =>
-	corridaPorId(peticion.tipo === 'importacion' ? (peticion.simulacion ? 1 : 2) : 3)
-
 export interface Ejecucion {
 	readonly peticion: Peticion
-	readonly corrida: CorridaDetalle
+	readonly corridaId: number
 	readonly progreso: ProgresoCorrida
+	/** El detalle, ya cerrado: trae el resumen definitivo que redacta el backend. */
+	readonly corrida: CorridaDetalle | null
+	/** `true` cuando el stream se cortó y se está consultando el detalle cada pocos segundos. */
+	readonly degradado: boolean
 }
 
-const PASO_MS = 70
-const LINEAS_POR_PASO = 2
+const MS_SONDEO = 2500
 
-export function useEjecucionCorrida() {
+/**
+ * Lanzar una corrida y seguirla en vivo.
+ *
+ * `POST /api/corridas` responde `201 { id }` en cuanto la corrida existe, sin esperar a que
+ * termine; con ese id se abre el SSE. Quien se conecta tarde recibe el último estado y el cierre.
+ * Si el navegador corta el stream se degrada a consultar el detalle cada pocos segundos, para que
+ * la barra no se quede congelada mintiendo.
+ */
+export function useEjecucionCorrida(alCerrarCorrida?: () => void) {
 	const [pendiente, setPendiente] = useState<Peticion | null>(null)
 	const [ejecucion, setEjecucion] = useState<Ejecucion | null>(null)
-	const temporizador = useRef<number | undefined>(undefined)
+	const [error, setError] = useState<ErrorPanel | null>(null)
+	const [lanzando, setLanzando] = useState(false)
+	const cerrarStream = useRef<(() => void) | null>(null)
+	const sondeo = useRef<number | undefined>(undefined)
+	const alCerrar = useRef(alCerrarCorrida)
+	useEffect(() => {
+		alCerrar.current = alCerrarCorrida
+	}, [alCerrarCorrida])
 
-	const arrancar = useCallback((peticion: Peticion) => {
-		const corrida = corridaDeEjemplo(peticion)
-		if (!corrida) return
-		window.clearInterval(temporizador.current)
-		let procesados = 0
-		const avanzar = (): void => {
-			procesados = Math.min(corrida.lineas.length, procesados + LINEAS_POR_PASO)
-			const hechas = corrida.lineas.slice(0, procesados)
-			const contadores: Record<string, number> = {}
-			for (const linea of hechas) contadores[linea.resultado] = (contadores[linea.resultado] ?? 0) + 1
-			const cerrada = procesados >= corrida.lineas.length
-			setEjecucion({
-				peticion,
-				corrida,
-				progreso: {
-					corrida_id: corrida.id,
-					fase: cerrada ? 'Corrida cerrada' : peticion.tipo === 'importacion' ? 'Leyendo contratos del administrador' : 'Revisando el libro de cuotas',
-					procesados,
-					total: corrida.lineas.length,
-					contadores,
-					ultimas: [...hechas].reverse().slice(0, 8),
-					cerrada,
-				},
-			})
-			if (cerrada) window.clearInterval(temporizador.current)
-		}
-		avanzar()
-		temporizador.current = window.setInterval(avanzar, PASO_MS)
+	const soltar = useCallback(() => {
+		cerrarStream.current?.()
+		cerrarStream.current = null
+		window.clearInterval(sondeo.current)
+		sondeo.current = undefined
 	}, [])
 
-	useEffect(() => () => window.clearInterval(temporizador.current), [])
+	/** Al cerrarse la corrida: su detalle definitivo y aviso a la pantalla para que se refresque. */
+	const cerrarConDetalle = useCallback((id: number) => {
+		soltar()
+		obtener<CorridaDetalle>(`/api/corridas/${id}`)
+			.then(detalle => setEjecucion(actual => (actual === null || actual.corridaId !== id ? actual : { ...actual, corrida: detalle })))
+			.catch(() => undefined)
+			.finally(() => alCerrar.current?.())
+	}, [soltar])
+
+	/** Plan B sin stream: el detalle cada pocos segundos hasta que la corrida deje de estar en curso. */
+	const sondear = useCallback((id: number, peticion: Peticion) => {
+		soltar()
+		setEjecucion(actual => (actual === null ? actual : { ...actual, degradado: true }))
+		sondeo.current = window.setInterval(() => {
+			obtener<CorridaDetalle>(`/api/corridas/${id}`)
+				.then(detalle => {
+					if (detalle.estado === 'en_curso') return
+					window.clearInterval(sondeo.current)
+					sondeo.current = undefined
+					setEjecucion({
+						peticion,
+						corridaId: id,
+						corrida: detalle,
+						degradado: true,
+						progreso: {
+							corrida_id: id,
+							fase: 'Corrida cerrada',
+							procesados: 0,
+							total: 0,
+							contadores: {},
+							ultimas: detalle.lineas.slice(-8).reverse(),
+							cerrada: true,
+						},
+					})
+					alCerrar.current?.()
+				})
+				.catch(() => undefined)
+		}, MS_SONDEO)
+	}, [soltar])
+
+	const seguir = useCallback((id: number, peticion: Peticion) => {
+		soltar()
+		setEjecucion({
+			peticion,
+			corridaId: id,
+			corrida: null,
+			degradado: false,
+			progreso: { corrida_id: id, fase: 'Conectando con el administrador', procesados: 0, total: 0, contadores: {}, ultimas: [], cerrada: false },
+		})
+
+		cerrarStream.current = seguirCorrida(
+			id,
+			progreso => {
+				setEjecucion(actual => (actual === null ? actual : { ...actual, progreso, degradado: false }))
+				if (progreso.cerrada) cerrarConDetalle(id)
+			},
+			() => {
+				// El corte también salta cuando el servidor cierra el stream al terminar: si la
+				// corrida ya estaba cerrada no hay nada que recuperar.
+				setEjecucion(actual => {
+					if (actual !== null && !actual.progreso.cerrada) sondear(id, peticion)
+					return actual
+				})
+			},
+		)
+	}, [soltar, cerrarConDetalle, sondear])
+
+	const arrancar = useCallback((peticion: Peticion) => {
+		setError(null)
+		setLanzando(true)
+		lanzarCorrida(peticion.tipo, peticion.simulacion)
+			.then(lanzada => seguir(lanzada.id, peticion))
+			.catch((fallo: unknown) => {
+				setError(fallo instanceof ErrorDeApi ? fallo.detalle : null)
+				// Un 409 significa que hay otra corrida viva: conviene releer el estado del panel.
+				alCerrar.current?.()
+			})
+			.finally(() => setLanzando(false))
+	}, [seguir])
+
+	useEffect(() => soltar, [soltar])
 
 	const solicitar = useCallback(
 		(peticion: Peticion) => {
@@ -100,25 +170,28 @@ export function useEjecucionCorrida() {
 	const cancelar = useCallback(() => setPendiente(null), [])
 
 	const cerrar = useCallback(() => {
-		window.clearInterval(temporizador.current)
+		soltar()
 		setEjecucion(null)
-	}, [])
+		setError(null)
+	}, [soltar])
 
-	return { pendiente, ejecucion, solicitar, confirmar, cancelar, cerrar }
+	return { pendiente, ejecucion, error, lanzando, solicitar, confirmar, cancelar, cerrar }
 }
 
 // ---------------------------------------------------------------- confirmación
 
 export function DialogoConfirmarCorrida({
 	peticion,
+	proveedor,
 	alConfirmar,
 	alCancelar,
 }: {
 	peticion: Peticion | null
+	/** La configuración con la que va a correr; si todavía no llegó, no se enseña. */
+	proveedor: Proveedor | null
 	alConfirmar: () => void
 	alCancelar: () => void
 }) {
-	const proveedor = CONFIGURACION.proveedor
 	const esImportacion = peticion?.tipo === 'importacion'
 	return (
 		<Dialog open={peticion !== null} onOpenChange={abierto => !abierto && alCancelar()}>
@@ -147,23 +220,25 @@ export function DialogoConfirmarCorrida({
 							</>
 						)}
 					</ul>
-					<div className="grid gap-1 rounded-lg bg-muted px-3 py-2.5 text-xs text-muted-foreground">
-						<span>
-							Estados importables: <strong className="text-foreground">{lista([...proveedor.estados_importables])}</strong>
-						</span>
-						<span>
-							Ventana:{' '}
-							<strong className="text-foreground">
-								{proveedor.ventana_meses === null ? 'sin ventana' : `${proveedor.ventana_meses} meses`}
-							</strong>{' '}
-							· Topes:{' '}
-							<strong className="text-foreground">
-								{proveedor.tope_facturas === null && proveedor.tope_monto_centavos === null
-									? 'sin topes'
-									: `${proveedor.tope_facturas ?? '—'} facturas / ${usd(proveedor.tope_monto_centavos)}`}
-							</strong>
-						</span>
-					</div>
+					{proveedor !== null && (
+						<div className="grid gap-1 rounded-lg bg-muted px-3 py-2.5 text-xs text-muted-foreground">
+							<span>
+								Estados importables: <strong className="text-foreground">{lista([...proveedor.estados_importables])}</strong>
+							</span>
+							<span>
+								Ventana:{' '}
+								<strong className="text-foreground">
+									{proveedor.ventana_meses === null ? 'sin ventana' : `${proveedor.ventana_meses} meses`}
+								</strong>{' '}
+								· Topes:{' '}
+								<strong className="text-foreground">
+									{proveedor.tope_facturas === null && proveedor.tope_monto_centavos === null
+										? 'sin topes'
+										: `${proveedor.tope_facturas ?? '—'} facturas / ${usd(proveedor.tope_monto_centavos)}`}
+								</strong>
+							</span>
+						</div>
+					)}
 					<p className="text-muted-foreground">
 						Si solo quieres ver qué pasaría, cancela y usa <strong className="text-foreground">Simular</strong>: no escribe nada.
 					</p>
@@ -202,8 +277,9 @@ function LineaDecision({ linea, simulacion }: { linea: LineaCorrida; simulacion:
 }
 
 export function ConsolaCorrida({ ejecucion, alCerrar }: { ejecucion: Ejecucion; alCerrar: () => void }) {
-	const { progreso, peticion, corrida } = ejecucion
-	const porcentaje = progreso.total === 0 ? 0 : Math.round((progreso.procesados / progreso.total) * 100)
+	const { progreso, peticion, corrida, corridaId, degradado } = ejecucion
+	// Sin total todavía (la corrida aún no preguntó cuántos contratos hay) la barra va indeterminada.
+	const porcentaje = progreso.total === 0 ? null : Math.round((progreso.procesados / progreso.total) * 100)
 	const destacados = Object.entries(progreso.contadores).sort((a, b) => b[1] - a[1])
 
 	return (
@@ -227,11 +303,12 @@ export function ConsolaCorrida({ ejecucion, alCerrar }: { ejecucion: Ejecucion; 
 			</div>
 
 			<div className="grid gap-3 px-4 py-3">
-				<Progress value={porcentaje} aria-label="Progreso de la corrida" />
-				{/* Región viva: aquí entra el progreso real cuando se conecte el SSE. */}
+				<Progress value={porcentaje ?? undefined} aria-label="Progreso de la corrida" />
+				{/* Región viva: el progreso real que llega por SSE (GET /api/corridas/:id/stream). */}
 				<p aria-live="polite" className="text-sm text-muted-foreground">
-					{progreso.fase}: {entero(progreso.procesados)} de {entero(progreso.total)}{' '}
-					{peticion.tipo === 'importacion' ? 'filas clasificadas' : 'facturas revisadas'} ({porcentaje} %).
+					{progreso.fase}
+					{progreso.total === 0 ? '…' : `: ${entero(progreso.procesados)} de ${entero(progreso.total)} contratos (${porcentaje} %).`}
+					{degradado && ' Sin progreso en vivo: consultando el detalle cada pocos segundos.'}
 				</p>
 				<ul className="flex flex-wrap gap-1.5">
 					{destacados.map(([resultado, valor]) => (
@@ -255,9 +332,9 @@ export function ConsolaCorrida({ ejecucion, alCerrar }: { ejecucion: Ejecucion; 
 
 			{progreso.cerrada && (
 				<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/40 px-4 py-3">
-					<p className="text-sm text-muted-foreground">{corrida.resumen}</p>
+					<p className="text-sm text-muted-foreground">{corrida?.resumen ?? 'Corrida cerrada.'}</p>
 					<Button asChild size="sm" variant="outline">
-						<Link to={`/corridas/${corrida.id}`}>Ver el detalle completo</Link>
+						<Link to={`/corridas/${corridaId}`}>Ver el detalle completo</Link>
 					</Button>
 				</div>
 			)}

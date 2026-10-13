@@ -11,7 +11,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { claveEfimera, claveLocal } from '../apoyo/secreto.ts'
 import { EMPRESA_POR_DEFECTO, PROVEEDOR_POR_DEFECTO } from '../dominio/configuracion.ts'
-import { ESQUEMA, VERSION_ESQUEMA } from './esquema.ts'
+import { ESQUEMA, MIGRACIONES, VERSION_ESQUEMA } from './esquema.ts'
 
 export const RUTA_BASE_POR_DEFECTO = resolve(import.meta.dirname, '../../../data/cobrix.sqlite')
 const RUTA_CLAVE_POR_DEFECTO = resolve(import.meta.dirname, '../../../data/.clave')
@@ -38,6 +38,7 @@ export function abrirAlmacen(opciones: OpcionesAlmacen = {}): Almacen {
 	db.exec('PRAGMA foreign_keys = ON')
 	if (!enMemoria) db.exec('PRAGMA journal_mode = WAL')
 	db.exec(ESQUEMA)
+	migrar(db)
 	db.exec(`PRAGMA user_version = ${VERSION_ESQUEMA}`)
 	sembrarFilasUnicas(db)
 
@@ -46,6 +47,19 @@ export function abrirAlmacen(opciones: OpcionesAlmacen = {}): Almacen {
 		? claveLocal(opciones.rutaClave)
 		: enMemoria ? claveEfimera() : claveLocal(RUTA_CLAVE_POR_DEFECTO)
 	return { db, clave, cerrar: () => db.close() }
+}
+
+/** Pone al día una base creada con un esquema anterior. Solo añade; nunca borra ni reescribe. */
+function migrar(db: DatabaseSync): void {
+	for (const paso of MIGRACIONES) {
+		try {
+			db.exec(paso)
+		} catch (error: unknown) {
+			// «duplicate column name» es la forma de SQLite de decir que la migración ya estaba.
+			const mensaje = error instanceof Error ? error.message : String(error)
+			if (!mensaje.includes('duplicate column name')) throw error
+		}
+	}
 }
 
 /** Empresa, proveedor y cerrojo son filas únicas: existen desde el primer arranque. */
