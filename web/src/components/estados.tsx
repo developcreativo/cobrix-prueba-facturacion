@@ -62,10 +62,13 @@ const DESTINO: Readonly<Record<string, { readonly a: string; readonly etiqueta: 
 export function BloqueError({
 	error,
 	alReintentar,
+	accion,
 	titulo = 'No se pudieron cargar los datos',
 }: {
 	error: ErrorPanel
 	alReintentar?: () => void
+	/** Un atajo propio de la pantalla, cuando el error tiene un destino concreto. */
+	accion?: ReactNode
 	titulo?: string
 }) {
 	const destino = DESTINO[error.codigo]
@@ -86,8 +89,9 @@ export function BloqueError({
 						{error.endpoint && <Codigo>{error.endpoint}</Codigo>}
 						{error.status !== null && <Codigo>HTTP {error.status}</Codigo>}
 					</p>
-					{(alReintentar || destino) && (
+					{(alReintentar || destino || accion) && (
 						<div className="mt-1 flex flex-wrap gap-2">
+							{accion}
 							{alReintentar && (
 								<Button variant="outline" size="sm" onClick={alReintentar}>
 									<RotateCw aria-hidden="true" />

@@ -1,4 +1,5 @@
 import { PackageOpen, SearchX } from 'lucide-react'
+import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { BloqueError, EstadoVacio } from '@/components/estados'
@@ -8,12 +9,13 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ERROR_EJEMPLO, FECHA_SANDBOX, buscarClientes } from '@/datos/ejemplo'
+import { useRecurso, useRetardo } from '@/datos/api'
+import { usePanel } from '@/datos/panel'
 import { antiguedad, entero, fecha, usd } from '@/lib/formato'
-import { useVista } from '@/lib/vista'
-import type { ClienteFila } from '@/tipos/panel'
+import type { ClienteFila, ListaClientes } from '@/tipos/panel'
 
-const COLUMNAS: readonly Columna<ClienteFila>[] = [
+/** La antigüedad se mide contra el reloj del sandbox; si aún no llegó, no se escribe. */
+const columnas = (hoy: string | null): readonly Columna<ClienteFila>[] => [
 	{ clave: 'nombre', cabecera: 'Cliente', celda: cliente => cliente.nombre, soloTabla: true },
 	{ clave: 'documento', cabecera: 'Documento', celda: cliente => <span className="font-mono text-[0.8rem]">{cliente.documento}</span> },
 	{ clave: 'tipo', cabecera: 'Tipo', celda: cliente => (cliente.persona === 'juridica' ? 'Jurídica' : 'Natural') },
@@ -35,7 +37,7 @@ const COLUMNAS: readonly Columna<ClienteFila>[] = [
 			) : (
 				<span className="grid">
 					<span>{fecha(cliente.vence_mas_antigua)}</span>
-					<span className="text-xs text-muted-foreground">{antiguedad(cliente.vence_mas_antigua, FECHA_SANDBOX)}</span>
+					{hoy !== null && <span className="text-xs text-muted-foreground">{antiguedad(cliente.vence_mas_antigua, hoy)}</span>}
 				</span>
 			),
 	},
@@ -43,13 +45,14 @@ const COLUMNAS: readonly Columna<ClienteFila>[] = [
 
 /** Tabla de clientes (§3.5): búsqueda por nombre, cédula o RIF. */
 export function PaginaClientes() {
-	const vista = useVista()
 	const [parametros, setParametros] = useSearchParams()
 	const consulta = parametros.get('q') ?? ''
+	const buscada = useRetardo(consulta)
+	const { hoy } = usePanel()
 
-	const resultado = buscarClientes(consulta)
-	const clientes = vista === 'vacio' ? [] : resultado.clientes
-	const sinDatos = vista === 'vacio'
+	const recurso = useRecurso<ListaClientes>(`/api/clientes?q=${encodeURIComponent(buscada)}`)
+	const clientes = recurso.dato?.clientes ?? []
+	const columnasDeLaTabla = useMemo(() => columnas(hoy), [hoy])
 
 	const cambiarConsulta = (valor: string): void => {
 		const siguientes = new URLSearchParams(parametros)
@@ -84,13 +87,13 @@ export function PaginaClientes() {
 					)}
 				</form>
 
-				{vista === 'error' ? (
-					<BloqueError error={ERROR_EJEMPLO} alReintentar={() => window.location.reload()} />
-				) : vista === 'cargando' ? (
+				{recurso.error ? (
+					<BloqueError error={recurso.error} alReintentar={() => recurso.recargar()} />
+				) : recurso.dato === null ? (
 					<Card className="p-4">
 						<SkeletonTabla filas={8} />
 					</Card>
-				) : sinDatos ? (
+				) : clientes.length === 0 && buscada === '' ? (
 					<Card>
 						<EstadoVacio
 							icono={PackageOpen}
@@ -103,25 +106,29 @@ export function PaginaClientes() {
 					<Card>
 						<EstadoVacio
 							icono={SearchX}
-							titulo={`Ningún cliente coincide con «${consulta}»`}
+							titulo={`Ningún cliente coincide con «${buscada}»`}
 							descripcion="Prueba con parte del nombre, o con la cédula con o sin guion: V-9876543, v9876543 y 9876543 encuentran al mismo titular."
 						>
 							<Button variant="outline" onClick={() => cambiarConsulta('')}>
-								Ver los {entero(buscarClientes('').total)} clientes
+								Ver todos los clientes
 							</Button>
 						</EstadoVacio>
 					</Card>
 				) : (
 					<Seccion
-						titulo={consulta ? `${entero(clientes.length)} resultados` : `${entero(clientes.length)} clientes`}
+						titulo={
+							buscada
+								? `${entero(recurso.dato.total)} ${recurso.dato.total === 1 ? 'resultado' : 'resultados'}`
+								: `${entero(recurso.dato.total)} ${recurso.dato.total === 1 ? 'cliente' : 'clientes'}`
+						}
 						descripcion="Cada fila abre el expediente del cliente."
 					>
 						<TablaDatos
 							etiqueta="Clientes importados, con su deuda y el vencimiento más antiguo"
-							columnas={COLUMNAS}
+							columnas={columnasDeLaTabla}
 							filas={clientes}
 							claveFila={cliente => cliente.id}
-							enlaceFila={cliente => `/clientes/${cliente.id}`}
+							enlaceFila={cliente => `/clientes/${encodeURIComponent(cliente.id)}`}
 							tituloTarjeta={cliente => cliente.nombre}
 							subtituloTarjeta={cliente => (cliente.persona === 'juridica' ? 'Persona jurídica' : 'Persona natural')}
 						/>

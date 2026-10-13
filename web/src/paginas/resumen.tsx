@@ -8,54 +8,64 @@ import { Dato, EncabezadoPagina, ListaDeDatos, RejillaDatos, Seccion, SkeletonTa
 import { TablaCorridas } from '@/components/tabla-corridas'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { ERROR_EJEMPLO, RESUMEN } from '@/datos/ejemplo'
+import { useRecurso } from '@/datos/api'
+import { usePanel } from '@/datos/panel'
 import { entero, fecha, lista, periodo, usd } from '@/lib/formato'
-import { useVista } from '@/lib/vista'
+import type { Resumen } from '@/tipos/panel'
 
 /** Pantalla de inicio (§3.8): totales, proveedor, corrida automática y últimas corridas. */
 export function PaginaResumen() {
-	const vista = useVista()
-	const vacio = vista === 'vacio'
-	const corrida = useEjecucionCorrida()
+	const recurso = useRecurso<Resumen>('/api/resumen')
+	const panel = usePanel()
+	const corrida = useEjecucionCorrida(() => {
+		recurso.recargar(true)
+		panel.recargar()
+	})
+	const resumen = recurso.dato
 
-	const totales = vacio
-		? {
-			clientes: 0,
-			contratos: 0,
-			contratos_leidos_ultima_corrida: null,
-			facturas_abiertas: 0,
-			facturas_pagadas: 0,
-			por_cobrar_centavos: 0,
-		}
-		: RESUMEN.totales
-	const corridas = vacio ? [] : RESUMEN.ultimas_corridas
-	const proveedor = RESUMEN.proveedor
+	const acciones = (
+		<>
+			<Button onClick={() => corrida.solicitar({ tipo: 'importacion', simulacion: false })} disabled={corrida.lanzando}>
+				<Download aria-hidden="true" />
+				Importar cuotas
+			</Button>
+			<Button variant="outline" onClick={() => corrida.solicitar({ tipo: 'pagadas', simulacion: false })} disabled={corrida.lanzando}>
+				<RefreshCcw aria-hidden="true" />
+				Actualizar pagadas
+			</Button>
+		</>
+	)
+
+	const vacio = resumen !== null && resumen.totales.clientes === 0 && resumen.ultimas_corridas.length === 0
 
 	return (
 		<>
 			<EncabezadoPagina
 				titulo="Resumen"
 				descripcion="Estado de la integración entre Cobrix y el administrador de facturas del ISP: qué hay importado, con qué proveedor y qué hizo la última sincronización."
-				acciones={
-					<>
-						<Button onClick={() => corrida.solicitar({ tipo: 'importacion', simulacion: false })}>
-							<Download aria-hidden="true" />
-							Importar cuotas
-						</Button>
-						<Button variant="outline" onClick={() => corrida.solicitar({ tipo: 'pagadas', simulacion: false })}>
-							<RefreshCcw aria-hidden="true" />
-							Actualizar pagadas
-						</Button>
-					</>
-				}
+				acciones={acciones}
 			/>
 
 			<div className="grid gap-5">
+				{corrida.error && (
+					<BloqueError
+						error={corrida.error}
+						titulo="No se pudo lanzar la corrida"
+						accion={
+							// El cerrojo lo publica `GET /api/salud`: si hay una corrida viva, se enlaza.
+							corrida.error.codigo === 'corrida_en_curso' && panel.salud?.corrida_en_curso != null ? (
+								<Button asChild size="sm" variant="outline">
+									<Link to={`/corridas/${panel.salud.corrida_en_curso.id}`}>Ver la corrida en curso</Link>
+								</Button>
+							) : undefined
+						}
+					/>
+				)}
 				{corrida.ejecucion && <ConsolaCorrida ejecucion={corrida.ejecucion} alCerrar={corrida.cerrar} />}
 
-				{vista === 'error' ? (
-					<BloqueError error={ERROR_EJEMPLO} alReintentar={() => window.location.reload()} />
-				) : vista === 'cargando' ? (
+				{recurso.error ? (
+					<BloqueError error={recurso.error} alReintentar={() => recurso.recargar()} />
+				) : resumen === null ? (
 					<>
 						<SkeletonTarjetas cantidad={5} />
 						<Card className="p-4">
@@ -65,19 +75,19 @@ export function PaginaResumen() {
 				) : (
 					<>
 						<RejillaDatos className="lg:grid-cols-5">
-							<TarjetaDato etiqueta="Clientes importados" valor={entero(totales.clientes)} />
+							<TarjetaDato etiqueta="Clientes importados" valor={entero(resumen.totales.clientes)} />
 							<TarjetaDato
 								etiqueta="Contratos espejados"
-								valor={entero(totales.contratos)}
+								valor={entero(resumen.totales.contratos)}
 								pie={
-									totales.contratos_leidos_ultima_corrida === null
+									resumen.totales.contratos_leidos_ultima_corrida === null
 										? undefined
-										: `de ${entero(totales.contratos_leidos_ultima_corrida)} leídos en la última corrida`
+										: `de ${entero(resumen.totales.contratos_leidos_ultima_corrida)} leídos en la última corrida`
 								}
 							/>
-							<TarjetaDato etiqueta="Facturas abiertas" valor={entero(totales.facturas_abiertas)} />
-							<TarjetaDato etiqueta="Facturas pagadas" valor={entero(totales.facturas_pagadas)} />
-							<TarjetaDato etiqueta="Por cobrar" valor={usd(totales.por_cobrar_centavos)} acento />
+							<TarjetaDato etiqueta="Facturas abiertas" valor={entero(resumen.totales.facturas_abiertas)} />
+							<TarjetaDato etiqueta="Facturas pagadas" valor={entero(resumen.totales.facturas_pagadas)} />
+							<TarjetaDato etiqueta="Por cobrar" valor={usd(resumen.totales.por_cobrar_centavos)} acento />
 						</RejillaDatos>
 
 						{vacio && (
@@ -103,27 +113,41 @@ export function PaginaResumen() {
 								</CardHeader>
 								<CardContent>
 									<ListaDeDatos>
-										<Dato etiqueta="Proveedor">{proveedor.nombre}</Dato>
+										<Dato etiqueta="Proveedor">{resumen.proveedor.nombre}</Dato>
 										<Dato etiqueta="URL de la API" mono>
-											{proveedor.api_url}
+											{resumen.proveedor.api_url}
 										</Dato>
-										<Dato etiqueta="Usuario">{proveedor.usuario}</Dato>
+										{resumen.proveedor.docs_url && (
+											<Dato etiqueta="Documentación">
+												<a
+													href={resumen.proveedor.docs_url}
+													target="_blank"
+													rel="noreferrer"
+													className="text-primary underline-offset-4 hover:underline"
+												>
+													Swagger del administrador
+												</a>
+											</Dato>
+										)}
+										<Dato etiqueta="Usuario">{resumen.proveedor.usuario}</Dato>
 										<Dato etiqueta="Contraseña">
-											{proveedor.password_definida ? (
+											{resumen.proveedor.password_definida ? (
 												<Pildora tono="ok">Guardada</Pildora>
 											) : (
 												<Pildora tono="warn">Sin definir</Pildora>
 											)}
 										</Dato>
-										<Dato etiqueta="Estados que se importan">{lista([...proveedor.estados_importables])}</Dato>
+										<Dato etiqueta="Estados que se importan">{lista([...resumen.proveedor.estados_importables])}</Dato>
 										<Dato etiqueta="Ventana">
-											{proveedor.ventana_meses === null ? 'Sin ventana' : `${proveedor.ventana_meses} meses`} ·{' '}
-											{proveedor.max_cuotas_recientes === null ? 'sin límite de recientes' : `máx. ${proveedor.max_cuotas_recientes} recientes`}
+											{resumen.proveedor.ventana_meses === null ? 'Sin ventana' : `${resumen.proveedor.ventana_meses} meses`} ·{' '}
+											{resumen.proveedor.max_cuotas_recientes === null
+												? 'sin límite de recientes'
+												: `máx. ${resumen.proveedor.max_cuotas_recientes} recientes`}
 										</Dato>
 										<Dato etiqueta="Topes por corrida">
-											{proveedor.tope_facturas === null && proveedor.tope_monto_centavos === null
+											{resumen.proveedor.tope_facturas === null && resumen.proveedor.tope_monto_centavos === null
 												? 'Sin topes'
-												: `${proveedor.tope_facturas ?? '—'} facturas · ${usd(proveedor.tope_monto_centavos)}`}
+												: `${resumen.proveedor.tope_facturas ?? '—'} facturas · ${usd(resumen.proveedor.tope_monto_centavos)}`}
 										</Dato>
 									</ListaDeDatos>
 								</CardContent>
@@ -136,25 +160,34 @@ export function PaginaResumen() {
 								<CardContent className="grid gap-3">
 									<ListaDeDatos>
 										<Dato etiqueta="Estado">
-											{RESUMEN.automatico.activa ? (
-												<Pildora tono="ok">Encendida</Pildora>
-											) : (
-												<Pildora tono="mute">Apagada</Pildora>
-											)}
+											{resumen.automatico.activa ? <Pildora tono="ok">Encendida</Pildora> : <Pildora tono="mute">Apagada</Pildora>}
 										</Dato>
 										<Dato etiqueta="Hora">
-											{RESUMEN.automatico.hora ?? '—'} ({RESUMEN.automatico.zona})
+											{resumen.automatico.hora ?? '—'} ({resumen.automatico.zona})
 										</Dato>
+										{resumen.automatico.proxima_ejecucion !== null && (
+											<Dato etiqueta="Próxima">{fecha(resumen.automatico.proxima_ejecucion)}</Dato>
+										)}
 										<Dato etiqueta="Qué hace">Importa las cuotas y después actualiza las facturas pagadas, en ese orden.</Dato>
 										<Dato etiqueta="Fecha del sandbox">
-											{fecha(RESUMEN.sandbox.hoy)} · mes actual {periodo(RESUMEN.sandbox.periodo_actual)}
+											{fecha(resumen.sandbox.hoy)} · mes actual {periodo(resumen.sandbox.periodo_actual)}
 										</Dato>
 									</ListaDeDatos>
 									<div className="flex flex-wrap gap-2">
-										<Button variant="outline" size="sm" onClick={() => corrida.solicitar({ tipo: 'importacion', simulacion: true })}>
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={corrida.lanzando}
+											onClick={() => corrida.solicitar({ tipo: 'importacion', simulacion: true })}
+										>
 											Simular importación
 										</Button>
-										<Button variant="outline" size="sm" onClick={() => corrida.solicitar({ tipo: 'pagadas', simulacion: true })}>
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={corrida.lanzando}
+											onClick={() => corrida.solicitar({ tipo: 'pagadas', simulacion: true })}
+										>
 											Simular actualización
 										</Button>
 									</div>
@@ -170,21 +203,26 @@ export function PaginaResumen() {
 								</Button>
 							}
 						>
-							{corridas.length === 0 ? (
+							{resumen.ultimas_corridas.length === 0 ? (
 								<EstadoVacio
 									titulo="Aún no hay corridas"
 									descripcion="Cuando importes cuotas o actualices las pagadas, cada corrida quedará aquí con su resultado y su detalle cuota por cuota."
 									accion={{ a: '/sincronizacion', etiqueta: 'Ir a Sincronización' }}
 								/>
 							) : (
-								<TablaCorridas corridas={corridas} />
+								<TablaCorridas corridas={resumen.ultimas_corridas} />
 							)}
 						</Seccion>
 					</>
 				)}
 			</div>
 
-			<DialogoConfirmarCorrida peticion={corrida.pendiente} alConfirmar={corrida.confirmar} alCancelar={corrida.cancelar} />
+			<DialogoConfirmarCorrida
+				peticion={corrida.pendiente}
+				proveedor={resumen?.proveedor ?? null}
+				alConfirmar={corrida.confirmar}
+				alCancelar={corrida.cancelar}
+			/>
 		</>
 	)
 }

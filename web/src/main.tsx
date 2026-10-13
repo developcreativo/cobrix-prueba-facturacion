@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 
 import App from '@/App'
 import { ProveedorTema } from '@/components/tema'
+import { ProveedorPanel } from '@/datos/panel'
 import '@/index.css'
 
 const raiz = document.getElementById('root')
@@ -13,7 +14,9 @@ createRoot(raiz).render(
 	<StrictMode>
 		<ProveedorTema>
 			<BrowserRouter>
-				<App />
+				<ProveedorPanel>
+					<App />
+				</ProveedorPanel>
 			</BrowserRouter>
 		</ProveedorTema>
 	</StrictMode>,

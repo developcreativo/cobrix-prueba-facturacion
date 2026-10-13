@@ -27,8 +27,8 @@ salen los objetos, no las pantallas.
 | `src/components/` | Piezas propias del panel (armazón, píldoras de estado, tablas, consola de corrida, explicador de decisiones) |
 | `src/components/ui/` | Componentes de shadcn/ui, generados con su CLI (`npx shadcn@latest add …`) |
 | `src/lib/` | `formato.ts` (montos, fechas y periodos), `resultados.ts` (taxonomía y tonos), `utils.ts` (`cn`) |
+| `src/datos/` | `api.ts` (el único `fetch` del panel y sus hooks) y `panel.tsx` (salud y empresa, una vez al arrancar) |
 | `src/tipos/panel.ts` | Contrato de la API del panel |
-| `src/datos/ejemplo.ts` | Datos de muestra, temporales |
 
 ## Convenciones
 
@@ -41,12 +41,15 @@ salen los objetos, no las pantallas.
 - **Responsive de verdad.** De 360 px en adelante sin desbordes: las tablas se convierten en
   tarjetas por debajo de `md`.
 
-## Revisar estados sin backend
+## Los tres estados de cada pantalla, con datos reales
 
-Cada pantalla que después traerá datos acepta un parámetro en la URL para forzar sus estados:
+Ya no hace falta forzarlos con un parámetro en la URL (se retiró con los datos de ejemplo):
 
-- `?estado=cargando` — skeletons
-- `?estado=error` — bloque de error con mensaje, sugerencia y código
-- `?estado=vacio` — estado vacío que explica qué hacer
+- **vacío** — Cobrix recién instalado, o después de «Borrar datos importados».
+- **error** — para el servidor del panel (`Ctrl-C` en `npm start`) y recarga: sale el bloque con
+  el mensaje, la sugerencia y el código, más «Reintentar».
+- **cargando** — los skeletons se ven en la primera carga; para mirarlos con calma, limita la red
+  en las herramientas del navegador.
 
-Por ejemplo: `/clientes?estado=vacio`, `/?estado=error`, `/sincronizacion?estado=cargando`.
+El «cómo seguir» de cualquier error lo redacta el backend (`sugerencia`); el panel solo lo
+muestra y, cuando el código tiene un destino claro, añade el enlace a la pantalla que lo arregla.

@@ -88,9 +88,15 @@ export function hora(iso: string | null | undefined): string {
 	return new Intl.DateTimeFormat('es-VE', { timeZone: ZONA, hour: 'numeric', minute: '2-digit' }).format(fechaObj)
 }
 
-/** `120` → `0,1 s`; `95000` → `1 min 35 s`. */
+/**
+ * `120` → `0,1 s`; `95000` → `1 min 35 s`.
+ *
+ * El almacén fecha las corridas con precisión de segundo, así que una corrida rápida puede dar
+ * 0: eso se dice en palabras («menos de 1 s») en vez de enseñar un «0 ms» que parece un error.
+ */
 export function duracion(ms: number | null | undefined): string {
 	if (ms === null || ms === undefined || Number.isNaN(ms)) return SIN_DATO
+	if (ms === 0) return 'menos de 1 s'
 	if (ms < 1000) return `${ms} ms`
 	const segundos = ms / 1000
 	if (segundos < 60) return `${segundos.toFixed(1).replace('.', ',')} s`

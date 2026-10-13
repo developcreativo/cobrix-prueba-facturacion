@@ -1,9 +1,9 @@
 /**
  * Contrato de la API del panel (SPEC §3.8).
  *
- * Estos tipos son lo que el panel espera recibir de `/api/*`. Hoy los satisface
- * `src/datos/ejemplo.ts` con datos de muestra; cuando el módulo de la API del panel esté
- * conectado, las pantallas no cambian: solo cambia de dónde salen los objetos.
+ * Estos tipos son lo que la API sirve de verdad (`src/cobrix/http/api.ts` y `vista.ts`). El
+ * cliente HTTP de `src/datos/api.ts` los devuelve tal cual: el panel no transforma respuestas
+ * ni rellena huecos.
  *
  * Convenciones que vienen del dominio (`src/cobrix/dominio/`, `src/cobrix/almacen/`) y no se
  * negocian aquí:
@@ -115,7 +115,7 @@ export interface Proveedor {
 	readonly auto_activa: boolean
 	/** `HH:MM` en la zona de la empresa. */
 	readonly auto_hora: string | null
-	readonly actualizado_en: string
+	/** Swagger del administrador, derivado de `api_url`. */
 	readonly docs_url?: string
 }
 
@@ -125,13 +125,55 @@ export interface Configuracion {
 	readonly proveedor: Proveedor
 }
 
-/** `POST /api/configuracion/probar-conexion` */
+/**
+ * `POST /api/configuracion/probar-conexion`.
+ *
+ * **Nunca falla con un código de error**: si las credenciales son malas responde `200` con
+ * `ok: false` y el `error` del administrador, porque la pregunta («¿conecta?») se contestó.
+ * Acepta en el cuerpo `{ api_url, usuario, password }` para probar lo que hay en el formulario
+ * sin guardarlo; lo que falte se toma de lo guardado.
+ */
 export interface PruebaConexion {
 	readonly ok: boolean
 	readonly mensaje: string
 	readonly contratos?: number
 	readonly latencia_ms?: number
 	readonly error?: ErrorPanel
+}
+
+/** `POST /api/configuracion/probar-conexion` (cuerpo). */
+export interface EntradaPruebaConexion {
+	readonly api_url?: string
+	readonly usuario?: string
+	readonly password?: string
+}
+
+/**
+ * `PUT /api/configuracion` (cuerpo). Los dos bloques son opcionales —se puede guardar solo la
+ * empresa o solo el proveedor— y lo que no venga conserva su valor. La contraseña vacía o
+ * ausente **no borra** la guardada.
+ */
+export interface EntradaConfiguracion {
+	readonly empresa?: {
+		readonly nombre: string
+		readonly rif: string
+		readonly email_cobranza: string
+	}
+	readonly proveedor?: {
+		readonly nombre: string
+		readonly api_url: string
+		readonly usuario: string
+		readonly password?: string
+		readonly estados_importables: readonly EstadoContrato[]
+		readonly ventana_meses: number | null
+		readonly max_cuotas_recientes: number | null
+		readonly dias_gracia: number
+		readonly tope_facturas: number | null
+		readonly tope_monto_centavos: number | null
+		readonly excluir_tipos_documento: readonly TipoDocumento[]
+		readonly auto_activa: boolean
+		readonly auto_hora: string | null
+	}
 }
 
 // ---------------------------------------------------------------- corridas
@@ -364,5 +406,48 @@ export interface Resumen {
 	readonly sandbox: {
 		readonly hoy: string
 		readonly periodo_actual: string
+	}
+}
+
+// ---------------------------------------------------------------- salud y acciones
+
+/** `GET /api/salud`: lo que el armazón del panel necesita saber en cuanto arranca. */
+export interface Salud {
+	readonly version: string
+	readonly zona: string
+	readonly sandbox: {
+		readonly hoy: string
+		readonly periodo_actual: string
+	}
+	readonly base: {
+		readonly ok: boolean
+		readonly clientes: number
+		readonly facturas: number
+		readonly corridas: number
+	}
+	readonly proveedor: {
+		readonly api_url: string
+		readonly usuario: string
+		readonly password_definida: boolean
+	}
+	/** La corrida real que tiene el cerrojo, si hay alguna. */
+	readonly corrida_en_curso: { readonly id: number; readonly desde: string | null } | null
+}
+
+/** `POST /api/corridas` → `201`. La corrida existe; su avance va por el stream. */
+export interface CorridaLanzada {
+	readonly id: number
+	readonly tipo: TipoCorrida
+	readonly simulacion: boolean
+}
+
+/** `POST /api/datos/borrar` → `200`. */
+export interface DatosBorrados {
+	readonly borrados: {
+		readonly clientes: number
+		readonly contratos: number
+		readonly facturas: number
+		readonly corridas: number
+		readonly eventos: number
 	}
 }

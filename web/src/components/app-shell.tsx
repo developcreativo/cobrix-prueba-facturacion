@@ -3,7 +3,7 @@ import type { ComponentType } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 
 import { BotonTema } from '@/components/tema'
-import { FECHA_SANDBOX, RESUMEN } from '@/datos/ejemplo'
+import { usePanel } from '@/datos/panel'
 import { fecha, periodo } from '@/lib/formato'
 import { cn } from '@/lib/utils'
 
@@ -47,6 +47,7 @@ function Marca({ compacta = false }: { compacta?: boolean }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
 	const { pathname } = useLocation()
+	const { empresa, salud } = usePanel()
 
 	return (
 		<div className="min-h-dvh bg-background">
@@ -77,14 +78,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 				</nav>
 				<div className="mt-auto grid gap-2 px-2 text-xs text-muted-foreground">
 					<div className="flex items-center justify-between gap-2">
-						<span className="truncate" title={RESUMEN.empresa.nombre}>
-							{RESUMEN.empresa.nombre}
+						<span className="truncate" title={empresa?.nombre ?? ''}>
+							{empresa?.nombre ?? ''}
 						</span>
 						<BotonTema />
 					</div>
-					<p>
-						Fecha del sandbox: {fecha(FECHA_SANDBOX)} · mes {periodo(RESUMEN.sandbox.periodo_actual)}
-					</p>
+					{salud !== null && (
+						<p>
+							Fecha del sandbox: {fecha(salud.sandbox.hoy)} · mes {periodo(salud.sandbox.periodo_actual)}
+						</p>
+					)}
 				</div>
 			</aside>
 
@@ -96,9 +99,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 			<main id="contenido" tabIndex={-1} className="mx-auto w-full max-w-[1280px] px-4 pt-5 pb-28 md:pb-12 md:pl-64 lg:px-8 lg:pl-[17rem]">
 				{children}
-				<p className="mt-10 text-xs text-muted-foreground md:hidden">
-					{RESUMEN.empresa.nombre} · sandbox {fecha(FECHA_SANDBOX)}
-				</p>
+				{salud !== null && (
+					<p className="mt-10 text-xs text-muted-foreground md:hidden">
+						{empresa?.nombre ?? 'Cobrix'} · sandbox {fecha(salud.sandbox.hoy)}
+					</p>
+				)}
 			</main>
 
 			{/* Navegación de móvil */}

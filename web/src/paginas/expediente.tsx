@@ -1,5 +1,5 @@
 import { FileText, UserPlus, Wallet } from 'lucide-react'
-import type { ComponentType } from 'react'
+import { useMemo, type ComponentType } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { BloqueError, EstadoVacio } from '@/components/estados'
@@ -7,10 +7,10 @@ import { PildoraContrato, PildoraFactura } from '@/components/pildora'
 import { Codigo, Dato, EncabezadoPagina, ListaDeDatos, RejillaDatos, Seccion, SkeletonTabla, SkeletonTarjetas, TarjetaDato } from '@/components/piezas'
 import { TablaDatos, type Columna } from '@/components/tabla-datos'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { ERROR_EJEMPLO, FECHA_SANDBOX, expedientePorId } from '@/datos/ejemplo'
+import { useRecurso } from '@/datos/api'
+import { usePanel } from '@/datos/panel'
 import { antiguedad, entero, fecha, fechaHora, periodo as formatoPeriodo, usd } from '@/lib/formato'
-import { useVista } from '@/lib/vista'
-import type { ContratoExpediente, EventoExpediente, FacturaExpediente, TipoEvento } from '@/tipos/panel'
+import type { ContratoExpediente, EventoExpediente, Expediente, FacturaExpediente, TipoEvento } from '@/tipos/panel'
 
 const COLUMNAS_CONTRATO: readonly Columna<ContratoExpediente>[] = [
 	{ clave: 'id', cabecera: 'Contrato', celda: contrato => <span className="font-mono text-[0.8rem]">{contrato.id}</span>, soloTabla: true },
@@ -21,22 +21,16 @@ const COLUMNAS_CONTRATO: readonly Columna<ContratoExpediente>[] = [
 		celda: contrato => (
 			<span className="grid">
 				<span>{contrato.plan}</span>
-				<span className="text-xs text-muted-foreground">
-					{usd(contrato.precio_centavos)} al mes
-				</span>
+				<span className="text-xs text-muted-foreground">{usd(contrato.precio_centavos)} al mes</span>
 			</span>
 		),
 	},
 	{ clave: 'sucursal', cabecera: 'Sucursal', celda: contrato => contrato.sucursal },
-	{
-		clave: 'direccion',
-		cabecera: 'Dirección',
-		envuelve: true,
-		celda: contrato => <span className="text-muted-foreground">{contrato.direccion ?? '—'}</span>,
-	},
+	{ clave: 'moneda', cabecera: 'Moneda', celda: contrato => contrato.moneda },
 ]
 
-const COLUMNAS_FACTURA: readonly Columna<FacturaExpediente>[] = [
+/** La antigüedad se mide contra el reloj del sandbox; si aún no llegó, no se escribe. */
+const columnasDeFactura = (hoy: string | null): readonly Columna<FacturaExpediente>[] => [
 	{ clave: 'numero', cabecera: 'Factura', celda: factura => <span className="font-mono text-[0.8rem]">{factura.numero}</span>, soloTabla: true },
 	{
 		clave: 'cuota',
@@ -68,15 +62,15 @@ const COLUMNAS_FACTURA: readonly Columna<FacturaExpediente>[] = [
 		clave: 'estado',
 		cabecera: 'Estado',
 		celda: factura => (
-			<span className="grid gap-1 justify-items-start">
+			<span className="grid justify-items-start gap-1">
 				<PildoraFactura estado={factura.estado} />
 				{factura.estado === 'pagada' ? (
 					<span className="text-xs text-muted-foreground">
 						{fecha(factura.pagada_el)}
 						{factura.isp_factura_num && ` · ${factura.isp_factura_num}`}
 					</span>
-				) : (
-					<span className="text-xs text-muted-foreground">{antiguedad(factura.vence_el, FECHA_SANDBOX)}</span>
+				) : hoy === null ? null : (
+					<span className="text-xs text-muted-foreground">{antiguedad(factura.vence_el, hoy)}</span>
 				)}
 			</span>
 		),
@@ -93,7 +87,7 @@ function Historial({ eventos }: { eventos: readonly EventoExpediente[] }) {
 	return (
 		<ol className="grid">
 			{eventos.map(evento => {
-				const Icono = ICONO_EVENTO[evento.tipo]
+				const Icono = ICONO_EVENTO[evento.tipo] ?? FileText
 				return (
 					<li key={evento.id} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 border-b border-border px-3 py-2.5 last:border-0 md:px-4">
 						<span className="mt-0.5 grid size-7 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
@@ -119,20 +113,46 @@ function Historial({ eventos }: { eventos: readonly EventoExpediente[] }) {
 /** Expediente del cliente (§3.6): datos, contratos, facturas e historial. */
 export function PaginaExpediente() {
 	const { id } = useParams()
-	const vista = useVista()
-	const expediente = expedientePorId(id ?? '')
+	const { hoy } = usePanel()
+	const recurso = useRecurso<Expediente>(`/api/clientes/${encodeURIComponent(id ?? '')}`)
+	const expediente = recurso.dato
+	const columnasFactura = useMemo(() => columnasDeFactura(hoy), [hoy])
 
-	if (!expediente) {
+	// Un 404 del expediente no es un fallo del panel: es un cliente que no está.
+	if (recurso.error?.codigo === 'cliente_no_encontrado') {
 		return (
 			<>
 				<EncabezadoPagina titulo="Cliente no encontrado" volver={{ a: '/clientes', etiqueta: 'Clientes' }} />
 				<Card>
 					<EstadoVacio
 						titulo="Ese cliente no existe en Cobrix"
-						descripcion="Puede que no se haya importado todavía, o que su identificación se normalice distinto. Búscalo en la tabla de clientes."
+						descripcion={recurso.error.mensaje}
 						accion={{ a: '/clientes', etiqueta: 'Ver todos los clientes' }}
 					/>
 				</Card>
+			</>
+		)
+	}
+
+	if (recurso.error !== null) {
+		return (
+			<>
+				<EncabezadoPagina titulo="Expediente" volver={{ a: '/clientes', etiqueta: 'Clientes' }} />
+				<BloqueError error={recurso.error} alReintentar={() => recurso.recargar()} />
+			</>
+		)
+	}
+
+	if (expediente === null) {
+		return (
+			<>
+				<EncabezadoPagina titulo="Expediente" volver={{ a: '/clientes', etiqueta: 'Clientes' }} />
+				<div className="grid gap-5">
+					<SkeletonTarjetas />
+					<Card className="p-4">
+						<SkeletonTabla filas={6} />
+					</Card>
+				</div>
 			</>
 		)
 	}
@@ -154,88 +174,75 @@ export function PaginaExpediente() {
 			/>
 
 			<div className="grid gap-5">
-				{vista === 'error' ? (
-					<BloqueError error={ERROR_EJEMPLO} alReintentar={() => window.location.reload()} />
-				) : vista === 'cargando' ? (
-					<>
-						<SkeletonTarjetas />
-						<Card className="p-4">
-							<SkeletonTabla filas={6} />
-						</Card>
-					</>
-				) : (
-					<>
-						<RejillaDatos>
-							<TarjetaDato etiqueta="Deuda abierta" valor={usd(totales.deuda_centavos)} acento />
-							<TarjetaDato etiqueta="Facturas abiertas" valor={entero(totales.facturas_abiertas)} />
-							<TarjetaDato etiqueta="Facturas pagadas" valor={entero(totales.facturas_pagadas)} />
-							<TarjetaDato etiqueta="Contratos" valor={entero(totales.contratos)} />
-						</RejillaDatos>
+				<RejillaDatos>
+					<TarjetaDato etiqueta="Deuda abierta" valor={usd(totales.deuda_centavos)} acento />
+					<TarjetaDato etiqueta="Facturas abiertas" valor={entero(totales.facturas_abiertas)} />
+					<TarjetaDato etiqueta="Facturas pagadas" valor={entero(totales.facturas_pagadas)} />
+					<TarjetaDato etiqueta="Contratos" valor={entero(totales.contratos)} />
+				</RejillaDatos>
 
-						<div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-							<Card>
-								<CardHeader>
-									<CardTitle>Datos del cliente</CardTitle>
-								</CardHeader>
-								<CardContent>
-									<ListaDeDatos className="sm:grid-cols-[minmax(7rem,auto)_minmax(0,1fr)]">
-										<Dato etiqueta="ID en Cobrix" mono>
-											{cliente.id}
-										</Dato>
-										<Dato etiqueta="Documento" mono>
-											{cliente.documento}
-										</Dato>
-										<Dato etiqueta="Correo">{cliente.email ?? '—'}</Dato>
-										<Dato etiqueta="Teléfono">{cliente.telefono ?? '—'}</Dato>
-										<Dato etiqueta="Origen">{cliente.origen}</Dato>
-										<Dato etiqueta="Creado">{fechaHora(cliente.creado_en)}</Dato>
-									</ListaDeDatos>
-								</CardContent>
-							</Card>
+				<div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+					<Card>
+						<CardHeader>
+							<CardTitle>Datos del cliente</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<ListaDeDatos className="sm:grid-cols-[minmax(7rem,auto)_minmax(0,1fr)]">
+								<Dato etiqueta="ID en Cobrix" mono>
+									{cliente.id}
+								</Dato>
+								<Dato etiqueta="Documento" mono>
+									{cliente.documento}
+								</Dato>
+								<Dato etiqueta="Correo">{cliente.email ?? '—'}</Dato>
+								<Dato etiqueta="Teléfono">{cliente.telefono ?? '—'}</Dato>
+								<Dato etiqueta="Origen">{cliente.origen}</Dato>
+								<Dato etiqueta="Creado">{fechaHora(cliente.creado_en)}</Dato>
+							</ListaDeDatos>
+						</CardContent>
+					</Card>
 
-							<Seccion titulo="Contratos en el administrador">
-								<TablaDatos
-									etiqueta="Contratos del cliente en el administrador de facturas"
-									columnas={COLUMNAS_CONTRATO}
-									filas={contratos}
-									claveFila={contrato => String(contrato.id)}
-									tituloTarjeta={contrato => <span className="font-mono text-[0.85rem]">Contrato {contrato.id}</span>}
-								/>
-							</Seccion>
-						</div>
+					<Seccion titulo="Contratos en el administrador">
+						<TablaDatos
+							etiqueta="Contratos del cliente en el administrador de facturas"
+							columnas={COLUMNAS_CONTRATO}
+							filas={contratos}
+							claveFila={contrato => String(contrato.id)}
+							tituloTarjeta={contrato => <span className="font-mono text-[0.85rem]">Contrato {contrato.id}</span>}
+						/>
+					</Seccion>
+				</div>
 
-						<Seccion
-							titulo="Facturas"
-							descripcion="Una factura de Cobrix por cada cuota del administrador."
-							nota="El vencimiento es el primer día del periodo: el administrador de facturas no da un vencimiento por cuota. El corte le suma los días de gracia configurados."
-						>
-							{facturas.length === 0 ? (
-								<EstadoVacio
-									titulo="Este cliente no tiene facturas"
-									descripcion="Se crean al importar las cuotas pendientes de sus contratos."
-									accion={{ a: '/sincronizacion', etiqueta: 'Importar cuotas' }}
-								/>
-							) : (
-								<TablaDatos
-									etiqueta="Facturas del cliente en Cobrix"
-									columnas={COLUMNAS_FACTURA}
-									filas={facturas}
-									claveFila={factura => factura.numero}
-									tituloTarjeta={factura => <span className="font-mono text-[0.85rem]">{factura.numero}</span>}
-									subtituloTarjeta={factura => factura.descripcion}
-								/>
-							)}
-						</Seccion>
+				<Seccion
+					titulo="Facturas"
+					descripcion="Una factura de Cobrix por cada cuota del administrador."
+					nota="El vencimiento es el primer día del periodo: el administrador de facturas no da un vencimiento por cuota. El corte le suma los días de gracia configurados."
+				>
+					{facturas.length === 0 ? (
+						<EstadoVacio
+							titulo="Este cliente no tiene facturas"
+							descripcion="Se crean al importar las cuotas pendientes de sus contratos."
+							accion={{ a: '/sincronizacion', etiqueta: 'Importar cuotas' }}
+						/>
+					) : (
+						<TablaDatos
+							etiqueta="Facturas del cliente en Cobrix"
+							columnas={columnasFactura}
+							filas={facturas}
+							claveFila={factura => factura.numero}
+							tituloTarjeta={factura => <span className="font-mono text-[0.85rem]">{factura.numero}</span>}
+							subtituloTarjeta={factura => factura.descripcion}
+						/>
+					)}
+				</Seccion>
 
-						<Seccion titulo="Historial" descripcion="Qué le ha pasado a este cliente dentro de Cobrix.">
-							{historial.length === 0 ? (
-								<EstadoVacio titulo="Sin movimientos" descripcion="Aquí quedan la creación del cliente, cada factura importada y cada pago aplicado." />
-							) : (
-								<Historial eventos={historial} />
-							)}
-						</Seccion>
-					</>
-				)}
+				<Seccion titulo="Historial" descripcion="Qué le ha pasado a este cliente dentro de Cobrix.">
+					{historial.length === 0 ? (
+						<EstadoVacio titulo="Sin movimientos" descripcion="Aquí quedan la creación del cliente, cada factura importada y cada pago aplicado." />
+					) : (
+						<Historial eventos={historial} />
+					)}
+				</Seccion>
 			</div>
 		</>
 	)
