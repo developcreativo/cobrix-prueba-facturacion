@@ -10,6 +10,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import type { Server } from 'node:http'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -28,9 +29,23 @@ const appPort = Number(process.env.PORT ?? 4300)
 const billingApiPort = Number(process.env.BILLING_API_PORT ?? 4310)
 const host = process.env.HOST ?? '127.0.0.1'
 
+/**
+ * Arrancar dos veces es lo más fácil que le puede pasar a cualquiera. Sin esto, Node escupe un
+ * `Unhandled 'error' event` con diez líneas de `node:net` que no dicen qué hacer.
+ */
+function avisarSiElPuertoEstaOcupado(servidor: Server, puerto: number, variable: string): void {
+	servidor.on('error', (error: NodeJS.ErrnoException) => {
+		console.error(error.code === 'EADDRINUSE'
+			? `El puerto ${puerto} ya está en uso: cierra el otro proceso o arranca con ${variable}=<otro puerto>.`
+			: `No se pudo abrir el puerto ${puerto}: ${error.message}`)
+		process.exit(1)
+	})
+}
+
 if (!existsSync(billingApiDb)) seedBillingApi(billingApiDb)
 
 const billingApi = createBillingApiServer(billingApiDb)
+avisarSiElPuertoEstaOcupado(billingApi.server, billingApiPort, 'BILLING_API_PORT')
 await billingApi.listen(billingApiPort, host)
 const simulatorUrl = `http://${host}:${billingApiPort}`
 
@@ -62,6 +77,7 @@ const panel = crearServidorPanel({
 	raizPanel,
 	rutaEnunciado: resolve(root, 'docs/ENUNCIADO.md'),
 })
+avisarSiElPuertoEstaOcupado(panel.servidor, appPort, 'PORT')
 await panel.escuchar(appPort, host)
 
 // El planificador mira el reloj cada minuto; si el automático está apagado, no hace nada.

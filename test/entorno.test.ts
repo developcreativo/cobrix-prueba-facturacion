@@ -9,6 +9,12 @@
  * §3.7 autoriza reemplazarlo). Lo que se verifica ahora es lo mismo en espíritu —el panel se
  * sirve, el enunciado sigue en `/enunciado` y la caja del ISP no es una pantalla del panel— más
  * dos cosas que el esqueleto no tenía: el enrutador del navegador y la API JSON.
+ *
+ * `web/dist` NO se versiona: lo crea `npm start` o `npm --prefix web run build`. En un clon recién
+ * hecho, `npm test` corre antes de que exista, así que esta prueba verifica las DOS ramas reales
+ * del servidor, y ninguna es un `skip` disfrazado: con el panel compilado, que se sirve y que el
+ * enrutador funciona; sin compilar, que responde el 503 documentado con el comando exacto. El CI
+ * compila el panel antes de `npm test`, así que la rama estricta se comprueba en cada push.
  */
 
 import assert from 'node:assert/strict'
@@ -20,7 +26,7 @@ import { after, before, describe, it } from 'node:test'
 import { SANDBOX_API_USER, seedBillingApi } from '../src/billing-api/seed.ts'
 import { createBillingApiServer, type BillingApiServer } from '../src/billing-api/server.ts'
 import { abrirAlmacen, type Almacen } from '../src/cobrix/almacen/base.ts'
-import { crearServidorPanel, type ServidorPanel } from '../src/cobrix/http/servidor.ts'
+import { COMANDOS_DEL_PANEL, crearServidorPanel, type ServidorPanel } from '../src/cobrix/http/servidor.ts'
 
 process.env.SANDBOX_TODAY = '2026-10-13'
 
@@ -74,37 +80,45 @@ describe('entorno de la prueba', () => {
 		}
 	})
 
-	it('el panel se sirve con su API y el enunciado, sin pantalla de simulador', async () => {
-		assert.equal(panel.panelCompilado, true, 'web/dist tiene que estar compilado: npm --prefix web run build')
-
-		// La raíz y cualquier ruta del enrutador sirven el mismo index.html: recargar en
-		// /clientes/V12345678 no puede dar 404.
+	it('el panel compilado se sirve con su enrutador, o se dice cómo compilarlo', async () => {
 		const raiz = await fetch(`${panelBase}/`)
-		assert.equal(raiz.status, 200)
-		assert.match(raiz.headers.get('content-type') ?? '', /text\/html/)
-		const html = await raiz.text()
-		assert.match(html, /<div id="root">/)
-		assert.match(html, /Cobrix/)
-		for (const ruta of ['/clientes', '/clientes/V12345678', '/sincronizacion', '/configuracion']) {
-			const respuesta = await fetch(`${panelBase}${ruta}`)
-			assert.equal(respuesta.status, 200, ruta)
-			assert.equal(await respuesta.text(), html, `${ruta} sirve el panel, no una página distinta`)
+		const cuerpo = await raiz.text()
+		const rutasDelPanel = ['/clientes', '/clientes/V12345678', '/sincronizacion', '/configuracion']
+
+		if (panel.panelCompilado) {
+			// La raíz y cualquier ruta del enrutador sirven el mismo index.html: recargar en
+			// /clientes/V12345678 no puede dar 404.
+			assert.equal(raiz.status, 200)
+			assert.match(raiz.headers.get('content-type') ?? '', /text\/html/)
+			assert.match(cuerpo, /<div id="root">/)
+			assert.match(cuerpo, /Cobrix/)
+			for (const ruta of rutasDelPanel) {
+				const respuesta = await fetch(`${panelBase}${ruta}`)
+				assert.equal(respuesta.status, 200, ruta)
+				assert.equal(await respuesta.text(), cuerpo, `${ruta} sirve el panel, no una página distinta`)
+			}
+			// Los recursos compilados se sirven con su tipo.
+			const icono = await fetch(`${panelBase}/favicon.svg`)
+			assert.equal(icono.status, 200)
+			assert.match(icono.headers.get('content-type') ?? '', /image\/svg/)
+			// La caja del ISP no es una pantalla del panel.
+			assert.doesNotMatch(cuerpo, /Simulador del administrador/)
+		} else {
+			// Sin compilar, el servidor no devuelve una página en blanco: dice el comando exacto.
+			assert.equal(raiz.status, 503)
+			assert.match(cuerpo, /no está compilado/)
+			assert.ok(cuerpo.includes(COMANDOS_DEL_PANEL), `el 503 tiene que decir «${COMANDOS_DEL_PANEL}»`)
+			for (const ruta of rutasDelPanel) {
+				assert.equal((await fetch(`${panelBase}${ruta}`)).status, 503, ruta)
+			}
 		}
 
-		// Los recursos compilados se sirven con su tipo.
-		const icono = await fetch(`${panelBase}/favicon.svg`)
-		assert.equal(icono.status, 200)
-		assert.match(icono.headers.get('content-type') ?? '', /image\/svg/)
-
-		// La API JSON del panel responde: eso es lo nuevo respecto del esqueleto.
+		// Pase lo que pase con el panel, la API JSON y el enunciado responden igual.
 		const salud = await (await fetch(`${panelBase}/api/salud`)).json() as Record<string, unknown>
 		assert.deepEqual(salud.sandbox, { hoy: '2026-10-13', periodo_actual: '2026-10' })
-
-		// La caja del ISP (`/__sim/*`) no es parte del panel ni se proxea desde él.
-		assert.doesNotMatch(html, /Simulador del administrador/)
+		assert.match(await (await fetch(`${panelBase}/enunciado`)).text(), /Criterios de aceptación/)
+		// La caja del ISP (`/__sim/*`) no se proxea desde el panel.
 		assert.equal((await fetch(`${panelBase}/api/__sim/pagar`, { method: 'POST', body: '{}' })).status, 404)
 		assert.equal((await fetch(`${panelBase}/api/simulador`)).status, 404)
-
-		assert.match(await (await fetch(`${panelBase}/enunciado`)).text(), /Criterios de aceptación/)
 	})
 })

@@ -297,7 +297,7 @@ export function crearApi(opciones: OpcionesApi): Api {
 		const conocidos = clientesExistentes(almacen)
 		json(respuesta, 200, {
 			...vistaCorrida(guardada),
-			contadores: vistaContadores(guardada.contadores),
+			contadores: vistaContadores(guardada.tipo, guardada.contadores),
 			lineas: guardada.lineas.map(linea => vistaLinea(linea, conocidos)),
 			config_snapshot: vistaSnapshot(guardada.configuracion),
 		})

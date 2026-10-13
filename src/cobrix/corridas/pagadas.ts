@@ -139,7 +139,7 @@ export async function correrActualizacionDePagadas(
 
 		// 3. Escritura. Simulación: corrida y líneas. Real: todo en una transacción.
 		const contadores = enTransaccion(almacen.db, () => {
-			if (!simulacion) escribirPagos(almacen, corrida.id, decisiones)
+			if (!simulacion) escribirPagos(almacen, corrida.id, decisiones, corrida.inicio)
 			const cuenta = contar(lineas, contratos)
 			guardarLineas(almacen, corrida.id, lineas)
 			cerrarCorrida(almacen, corrida.id, { contadores: cuenta, resumen: resumir(cuenta, simulacion) })
@@ -268,7 +268,18 @@ async function revisarContrato(
 	})
 }
 
-function escribirPagos(almacen: Almacen, corridaId: number, decisiones: readonly Decision[]): void {
+/**
+ * `momento` es cuándo lo registró Cobrix, no cuándo cobró el ISP: el historial del expediente se
+ * ordena por eso. La fecha del ISP sigue siendo el dato del pago (`factura.pagada_el` y el
+ * detalle del evento); si se usara para fechar el evento, un cobro de hoy a medianoche aparecería
+ * por debajo del alta del cliente, que se sella con la hora real.
+ */
+function escribirPagos(
+	almacen: Almacen,
+	corridaId: number,
+	decisiones: readonly Decision[],
+	momento: string,
+): void {
 	for (const { factura, veredicto } of decisiones) {
 		if (veredicto.resultado !== 'marcada_pagada' || veredicto.cobro === undefined) continue
 		const cobro = veredicto.cobro
@@ -284,7 +295,7 @@ function escribirPagos(almacen: Almacen, corridaId: number, decisiones: readonly
 			tipo: 'factura_pagada',
 			corridaId,
 			detalle: `El ISP cobró ${usd(factura.saldo)} de la cuota ${factura.deudaId} con su factura ${cobro.facturaIspNum} del ${cobro.fecha}.`,
-		}, `${cobro.fecha}T00:00:00`)
+		}, momento)
 	}
 }
 

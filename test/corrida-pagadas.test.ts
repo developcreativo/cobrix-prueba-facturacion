@@ -132,8 +132,14 @@ describe('ciclo completo: importar, cobrar en la caja y actualizar pagadas', () 
 		assert.deepEqual(pagadasDe(900113), [], 'ELENA RUIZ: el cobro fue anulado, nada cambia')
 		assert.equal(cuantas(almacen, 'factura', `contrato_id = 900113 AND estado = 'abierta'`), 2)
 
-		const { de } = lineasDe(almacen, corrida.corridaId)
+		const { de, detalle } = lineasDe(almacen, corrida.corridaId)
 		assert.equal(de('marcada_pagada').length, 8)
+		// La cuota de ANA PEREZ tenía un abono previo: el ISP cobró 25 y Cobrix solo tenía 20
+		// abiertos. El motivo tiene que nombrar las dos cifras y su papel, o descuadra con la fila.
+		const conAbonoPrevio = detalle.lineas.find(linea => linea.deudaId === '7000008')
+		assert.equal(conAbonoPrevio?.monto, 2_000)
+		assert.match(conAbonoPrevio?.motivo ?? '', /USD 25,00 pagados sobre la cuota/)
+		assert.match(conAbonoPrevio?.motivo ?? '', /USD 20,00 que Cobrix tenía abiertos/)
 		assert.equal(de('abono_parcial').length, 1, 'la siguiente cuota de LUIS GOMEZ quedó a medias')
 		assert.deepEqual(de('abono_parcial')[0]?.periodo, '2026-08')
 		assert.equal(de('sin_cambio').length, 33)

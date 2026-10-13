@@ -151,6 +151,16 @@ export function vistaSnapshot(configuracion: unknown): Json {
 	}
 }
 
+/**
+ * La importación recorre TODOS los contratos del administrador; la de pagadas solo los que tienen
+ * facturas abiertas en Cobrix, que son menos y bajan a medida que se cobran. Son tres cifras
+ * correctas que no se pueden llamar igual.
+ */
+const CONTRATOS: Record<'importacion' | 'pagadas', string> = {
+	importacion: 'Contratos leídos en el administrador',
+	pagadas: 'Contratos con facturas abiertas',
+}
+
 /** Etiquetas de los contadores escalares, y cuáles van en las tarjetas de arriba. */
 const ESCALARES: Record<string, { etiqueta: string; tipo: 'cuenta' | 'dinero'; destacado: boolean }> = {
 	facturasNuevas: { etiqueta: 'Facturas nuevas', tipo: 'cuenta', destacado: true },
@@ -160,7 +170,8 @@ const ESCALARES: Record<string, { etiqueta: string; tipo: 'cuenta' | 'dinero'; d
 	facturasPagadas: { etiqueta: 'Facturas pagadas', tipo: 'cuenta', destacado: true },
 	montoCobrado: { etiqueta: 'Monto cobrado', tipo: 'dinero', destacado: true },
 	facturasRevisadas: { etiqueta: 'Facturas revisadas', tipo: 'cuenta', destacado: true },
-	contratos: { etiqueta: 'Contratos leídos', tipo: 'cuenta', destacado: false },
+	// `contratos` cuenta cosas distintas en cada corrida, así que la etiqueta la pone `vistaContadores`.
+	contratos: { etiqueta: 'Contratos', tipo: 'cuenta', destacado: false },
 	cuotasVistas: { etiqueta: 'Cuotas vistas', tipo: 'cuenta', destacado: false },
 	clientesRefrescados: { etiqueta: 'Clientes puestos al día', tipo: 'cuenta', destacado: false },
 	contratosRefrescados: { etiqueta: 'Contratos puestos al día', tipo: 'cuenta', destacado: false },
@@ -174,14 +185,18 @@ const ESCALARES: Record<string, { etiqueta: string; tipo: 'cuenta' | 'dinero'; d
  * Las líneas por resultado solo se publican cuando difieren de las cuotas: coinciden siempre
  * salvo cuando una línea resume un contrato entero, y repetirlas sería ruido.
  */
-export function vistaContadores(contadores: Readonly<Record<string, unknown>> | null): readonly Json[] {
+export function vistaContadores(
+	tipo: 'importacion' | 'pagadas',
+	contadores: Readonly<Record<string, unknown>> | null,
+): readonly Json[] {
 	if (contadores === null) return []
 	const lista: Json[] = []
 
 	for (const [clave, forma] of Object.entries(ESCALARES)) {
 		const valor = contadores[clave]
 		if (typeof valor !== 'number') continue
-		lista.push({ clave, etiqueta: forma.etiqueta, valor, tipo: forma.tipo, destacado: forma.destacado })
+		const etiqueta = clave === 'contratos' ? CONTRATOS[tipo] : forma.etiqueta
+		lista.push({ clave, etiqueta, valor, tipo: forma.tipo, destacado: forma.destacado })
 	}
 
 	const cuotas = esObjeto(contadores.cuotas) ? contadores.cuotas : {}

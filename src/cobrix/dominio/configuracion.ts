@@ -10,6 +10,17 @@
 import { TIPOS_DOCUMENTO, esTipoDocumento, type TipoDocumento } from './identificacion.ts'
 import { ESTADOS_CONOCIDOS, type ConfiguracionImportacion } from './importacion.ts'
 
+/**
+ * El administrador simulado se levanta en `BILLING_API_PORT` (4310 por defecto), así que la URL
+ * por defecto del proveedor sigue a ese puerto: quien arranque el entorno aislado en otro no
+ * empieza con el panel apuntando a un puerto donde no hay nadie. Un valor raro cae al 4310 en
+ * vez de construir una URL inválida.
+ */
+export function urlDelAdministrador(puerto: string | undefined = process.env.BILLING_API_PORT): string {
+	const limpio = puerto !== undefined && /^\d{2,5}$/.test(puerto) ? puerto : '4310'
+	return `http://127.0.0.1:${limpio}/api/v1`
+}
+
 export const VENTANAS_PERMITIDAS: readonly number[] = [3, 6, 9, 12]
 export const HORA = /^([01]\d|2[0-3]):([0-5]\d)$/
 
@@ -30,7 +41,7 @@ export interface Proveedor extends ConfiguracionImportacion {
 
 export const PROVEEDOR_POR_DEFECTO: Proveedor = {
 	nombre: 'Administrador de facturas del ISP',
-	apiUrl: 'http://127.0.0.1:4310/api/v1',
+	apiUrl: urlDelAdministrador(),
 	usuario: 'cobrix',
 	estadosImportables: ['ACTIVO', 'CORTADO'],
 	ventanaMeses: null,

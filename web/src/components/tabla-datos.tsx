@@ -1,6 +1,6 @@
 import { ChevronRight } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
@@ -40,6 +40,24 @@ interface Props<T> {
 }
 
 export function TablaDatos<T>({ columnas, filas, claveFila, enlaceFila, tituloTarjeta, subtituloTarjeta, etiqueta }: Props<T>) {
+	const navegar = useNavigate()
+
+	/**
+	 * Clic en cualquier punto de la fila (§3.5: «cada fila abre el expediente»).
+	 *
+	 * Es un atajo, no el enlace: el enlace de verdad sigue siendo el nombre, que es lo que ven el
+	 * teclado y los lectores de pantalla, y lo que sabe abrirse en otra pestaña. Por eso aquí se
+	 * ignoran los clics que ya tienen dueño, los que solo terminan una selección de texto y los
+	 * que llevan modificador, que el usuario espera que abran pestaña y eso solo lo hace un `a`.
+	 */
+	const abrirFila = (evento: ReactMouseEvent<HTMLTableRowElement>, destino: string): void => {
+		if (evento.defaultPrevented) return
+		if (evento.target instanceof Element && evento.target.closest('a, button, input, select, textarea, label')) return
+		if ((window.getSelection()?.toString() ?? '') !== '') return
+		if (evento.metaKey || evento.ctrlKey || evento.shiftKey || evento.altKey) return
+		navegar(destino)
+	}
+
 	return (
 		<>
 			{/* Escritorio */}
@@ -60,7 +78,11 @@ export function TablaDatos<T>({ columnas, filas, claveFila, enlaceFila, tituloTa
 						{filas.map(fila => {
 							const destino = enlaceFila?.(fila)
 							return (
-								<TableRow key={claveFila(fila)} className="align-top">
+								<TableRow
+									key={claveFila(fila)}
+									className={cn('align-top', destino !== undefined && 'cursor-pointer')}
+									onClick={destino === undefined ? undefined : evento => abrirFila(evento, destino)}
+								>
 									{columnas.map((columna, indice) => (
 										<TableCell
 											key={columna.clave}

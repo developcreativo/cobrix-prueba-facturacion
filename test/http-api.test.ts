@@ -460,6 +460,48 @@ describe('clientes y expediente', () => {
 		assert.ok(historial.every(evento => INSTANTE_CON_DESFASE.test(String(evento.ocurrido_en))))
 	})
 
+	it('el historial se ordena por cuándo ocurrió en Cobrix, no por la fecha del ISP', async t => {
+		const { sandbox, base } = await montar(t)
+		await importar(base)
+		// El ISP cobra hoy: su factura se emite con fecha del día, sin hora.
+		await fetch(`${sandbox.raiz}/__sim/pagar`, enviar({ id_contrato: 900101 }))
+		const pagadas = await pedir(base, '/api/corridas', enviar({ tipo: 'pagadas', simulacion: false }))
+		await esperarCierre(base, pagadas.cuerpo.id as number)
+
+		const { cuerpo } = await pedir(base, '/api/clientes/V12345678')
+		const historial = cuerpo.historial as Json[]
+
+		assert.deepEqual(historial.map(evento => evento.tipo), [
+			'factura_pagada', 'factura_pagada', 'factura_pagada',
+			'factura_importada', 'factura_importada', 'factura_importada',
+			'cliente_creado',
+		], 'el cobro es lo último que pasó; el alta, lo primero')
+		assert.ok(historial.every(evento => INSTANTE_CON_DESFASE.test(String(evento.ocurrido_en))))
+		// La fecha del ISP sigue siendo el dato del pago, en la factura.
+		const facturas = cuerpo.facturas as Json[]
+		assert.ok(facturas.every(factura => factura.pagada_el === '2026-10-13'))
+		assert.ok(facturas.every(factura => String(factura.isp_factura_num).length > 0))
+	})
+
+	it('«contratos» se llama distinto en cada corrida, porque cuenta cosas distintas', async t => {
+		const { sandbox, base } = await montar(t)
+		const importacion = await importar(base)
+		await fetch(`${sandbox.raiz}/__sim/pagar`, enviar({ id_contrato: 900101 }))
+		const creada = await pedir(base, '/api/corridas', enviar({ tipo: 'pagadas', simulacion: false }))
+		const pagadas = await esperarCierre(base, creada.cuerpo.id as number)
+
+		const etiquetaDe = (detalle: Json): unknown =>
+			(detalle.contadores as Json[]).find(contador => contador.clave === 'contratos')?.etiqueta
+		const detalleImportacion = (await pedir(base, `/api/corridas/${importacion}`)).cuerpo
+
+		assert.equal(etiquetaDe(detalleImportacion), 'Contratos leídos en el administrador')
+		assert.equal(etiquetaDe(pagadas), 'Contratos con facturas abiertas')
+		const valorImportacion = (detalleImportacion.contadores as Json[]).find(c => c.clave === 'contratos')?.valor
+		const valorPagadas = (pagadas.contadores as Json[]).find(c => c.clave === 'contratos')?.valor
+		assert.equal(valorImportacion, 27, 'la importación recorre todos los contratos del administrador')
+		assert.equal(valorPagadas, 21, 'pagadas solo revisa los que tienen facturas abiertas')
+	})
+
 	it('un cliente que no existe responde 404 con una sugerencia', async t => {
 		const { base } = await montar(t)
 
