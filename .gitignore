@@ -17,3 +17,6 @@ web/dist
 .env.*
 !.env.example
 *.tsbuildinfo
+
+# Clave local para cifrar la contraseña del proveedor
+data/.clave
