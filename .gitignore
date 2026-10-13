@@ -3,3 +3,17 @@ data/*.sqlite-wal
 data/*.sqlite-shm
 *.log
 .DS_Store
+
+# Base de Cobrix: la crea la integración al arrancar, no se versiona
+# (data/billing-api.sqlite SÍ se versiona: es el material entregado)
+data/cobrix.sqlite
+
+# Panel
+web/node_modules
+web/dist
+
+# Entorno local
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
