@@ -101,8 +101,7 @@ export function vistaProveedor(configuracion: Configuracion): Json {
 		excluir_tipos_documento: proveedor.excluirTiposDocumento,
 		auto_activa: proveedor.autoActiva,
 		auto_hora: proveedor.autoHora,
-		// El panel lo declara obligatorio y no se guarda cuándo se editó (la SPEC retiró la
-		// columna): se sirve el instante de la lectura, que es lo único cierto que hay.
+		// Enlace al Swagger del administrador, derivado de su propia URL.
 		docs_url: urlDeDocs(proveedor.apiUrl),
 	}
 }
