@@ -351,6 +351,39 @@ Errores siempre con la misma forma: `{ error: { codigo, mensaje, endpoint, statu
 
 Los instantes viajan en ISO **con desfase explícito** (`2026-10-13T14:03:11-04:00`). El almacén guarda hora civil de Caracas sin zona, y es la capa HTTP la que añade el desfase: enviarla cruda desplazaría el historial varias horas según la máquina que lo mire.
 
+#### Decisiones del contrato, tomadas el 2026-10-13
+
+Al construir el panel contra datos de ejemplo aparecieron campos que la interfaz prometía y el
+almacén no podía servir. Cada uno se resolvió en una de tres direcciones, y se anotan aquí para
+que no se vuelvan a discutir ni se «arreglen» de vuelta.
+
+**Se añaden tres columnas, porque el dato existe y se estaba tirando.**
+
+| Columna | Por qué |
+| --- | --- |
+| `corrida_linea.titular_nombre` y `.titular_identificacion` | El detalle de una corrida es el acta de lo que el ISP dijo en ese momento. Para las líneas de contratos que **no** se importaron no hay cliente en Cobrix, así que sin esto la pantalla muestra «900122 · 7000112 · Excluida por estado», que a un cobrador no le dice nada. El nombre lo tenemos en la mano al clasificar; tirarlo y luego intentar recuperarlo con un JOIN es imposible por construcción. |
+| `cliente.identificacion_bruta` | §3.5 y §3.6 muestran «documento». Guardamos la identificación normalizada como clave, que es correcto, pero mostrar `V12345678` cuando el ISP publica `V-12345678` es una pequeña mentira en una pantalla cuyo trabajo es reflejar al ISP. |
+
+**Se calculan en la capa HTTP, sin tocar el esquema.** `duracion_ms` (de `inicio` y `fin`), el
+número de factura de Cobrix (`COB-000042`, formateado a partir de `factura.id`), el `titulo` de
+cada evento (del `tipo`), `proxima_ejecucion` (de `auto_hora` y la fecha del sandbox),
+`ultima_ejecucion` (la última corrida con `disparo = 'automatica'`), `sandbox.hoy` y
+`sandbox.periodo_actual` (de `src/shared/dates.ts`), y los agregados por cliente de la tabla de
+§3.5, que son una consulta nueva en `almacen/clientes.ts`. `probar-conexion` envuelve el
+`probarConexion()` del cliente y convierte el `ErrorApi` en `{ ok: false, error }` en vez de
+propagar la excepción.
+
+**Se retiran del panel, porque nadie los pidió.** La dirección del contrato, la zona horaria y la
+moneda como campos de empresa (son constantes: `America/Caracas` y USD, en un solo sitio),
+`proveedor.actualizado_en`, y la `descripcion` por línea, que duplicaba el `motivo` que la línea
+ya guarda. Añadir columnas para datos que el enunciado no pide es exactamente la clase de
+complejidad que luego nadie sabe por qué existe.
+
+**Se construye de verdad:** el progreso en vivo (§5.3). Las dos corridas aceptan un
+`alProgresar?: (evento: ProgresoCorrida) => void`, la capa HTTP lo convierte en SSE y el panel
+deja de simularlo con un temporizador. Es el único de los nueve que cuesta trabajo real, y es el
+que el enunciado §7 invita explícitamente a hacer.
+
 ### 3.9 Plan de pruebas
 
 | Nivel | Qué cubre |
