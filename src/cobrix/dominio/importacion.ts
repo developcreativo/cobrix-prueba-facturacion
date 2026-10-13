@@ -22,6 +22,16 @@
  * documento permitido y moneda coherente), que es justo cuando el flujo llega a la etapa cuota a
  * cuota. Si el contrato cayó antes, no hay nada fresco que ofrecer.
  *
+ * Con UNA excepción, y es la que importa en cuanto existe la corrida de pagadas: un contrato AL
+ * DÍA responde una sola fila con `deuda_id "0"` y retorna en el paso 1, antes de la etapa cuota a
+ * cuota. Ese es justo el cliente que acaba de pagar todo, y dejarlo sin refrescar lo congelaría
+ * para siempre con el estado que tenía el día que debía. Por eso ese retorno también ofrece
+ * `frescos`, tras comprobar lo que SÍ se puede comprobar sin cuotas: estado conocido e
+ * importable, identificación normalizable y tipo de documento permitido. La coherencia de moneda
+ * se omite ahí a propósito: la regla compara la cuota más alta con el precio del plan y sin
+ * cuotas no hay con qué comparar. Omitirla es seguro porque refrescar no inserta: lo único que
+ * puede pasar es poner al día un contrato que Cobrix ya tenía.
+ *
  * Y EL LÍMITE DURO: refrescar ACTUALIZA, NUNCA INSERTA. Quien consuma `frescos` solo puede tocar
  * clientes y contratos que Cobrix ya tiene. Si pudiera crear, cualquier titular cuyas cuotas
  * queden todas fuera (por ventana, por máximo de recientes o porque ya están importadas)
@@ -155,7 +165,10 @@ export function clasificarContrato(
 		motivo: 'El administrador responde con la fila «deuda_id 0»: el contrato no debe nada.',
 		traza: [pasoDescarta('fila deuda_id "0"', 'no es una cuota, es la señal de «sin deuda»')],
 	}))
-	if (cuotas.length === 0) return soloLineas(lineasSinDeuda)
+	// Un contrato al día no trae cuotas que clasificar, pero sí datos que poner al día.
+	if (cuotas.length === 0) {
+		return { lineas: lineasSinDeuda, candidatas: [], frescos: frescosDeContratoAlDia(base, cfg) }
+	}
 
 	const traza: PasoTraza[] = []
 
@@ -356,6 +369,19 @@ export function aplicarTopes(
 	}
 
 	return { aImportar, frenadas }
+}
+
+/**
+ * Datos vigentes de un contrato sin cuotas pendientes. Repite las comprobaciones de contrato que
+ * no necesitan cuotas y omite la de moneda (ver la cabecera). No produce ni una línea: solo dice
+ * si este contrato es de los que Cobrix puede poner al día.
+ */
+function frescosDeContratoAlDia(base: FilaContrato, cfg: ConfiguracionImportacion): DatosFrescos | null {
+	if (!ESTADOS_CONOCIDOS.includes(base.estado) || !cfg.estadosImportables.includes(base.estado)) return null
+	const identificacion = normalizarIdentificacion(base.identificacionBruta)
+	if (identificacion === null) return null
+	if (identificacion.tipo !== null && cfg.excluirTiposDocumento.includes(identificacion.tipo)) return null
+	return { cliente: datosCliente(base, identificacion), contrato: datosContrato(base) }
 }
 
 function soloLineas(lineas: readonly LineaImportacion[]): ClasificacionContrato {

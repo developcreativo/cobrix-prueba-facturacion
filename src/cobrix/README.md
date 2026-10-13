@@ -30,6 +30,7 @@ almacen/     persistencia (node:sqlite)
 
 corridas/    orquestación (conecta api/ + dominio/ + almacen/)
   importacion   la corrida de importación, real y simulada
+  pagadas       la corrida de actualización de pagadas, real y simulada
 
 apoyo/
   secreto       AES-256-GCM para la contraseña del proveedor
@@ -54,6 +55,7 @@ ENUNCIADO.md §4 se prueban en tablas, sin servidor ni base.
 | Una sola corrida real a la vez | `almacen/corridas.ts` (tabla `bloqueo`) |
 | El expediente refleja el ISP: refrescar titular y contrato **sin** insertar | `dominio/importacion.ts` (`frescos`) + `almacen/clientes.ts` (`refrescarCliente`, `refrescarContrato`) |
 | Pagada, abono parcial, exonerada, sin evidencia | `dominio/pagos.ts` |
+| La ventana del libro (hasta el último día del periodo actual) y el desempate del mes en curso | `corridas/pagadas.ts` |
 | Rarezas de la API (`estado`, `success: false`, filas sin orden, cuotas futuras) | `api/cliente.ts` + `api/lectura.ts` |
 
 **El orden de evaluación de las reglas de importación no es libre**: está documentado en la
@@ -63,9 +65,9 @@ juzgar la moneda».
 ## Pruebas
 
 ```bash
-npm test          # dominio (tablas) + API (sandbox y stub) + almacén + corrida de importación
+npm test          # dominio (tablas) + API (sandbox y stub) + almacén + corridas (ciclo completo)
 npm run typecheck
 ```
 
-Pendiente: corrida de actualización de pagadas, planificador de la corrida automática, API del
-panel y pantallas (ver `docs/SPEC.md` §3).
+Pendiente: planificador de la corrida automática, API del panel y pantallas
+(ver `docs/SPEC.md` §3).

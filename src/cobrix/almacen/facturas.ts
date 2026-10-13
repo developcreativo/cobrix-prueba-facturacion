@@ -9,7 +9,8 @@
  */
 
 import type { Centavos } from '../dominio/dinero.ts'
-import { comoEntero, type Almacen } from './base.ts'
+import type { FacturaAbierta } from '../dominio/pagos.ts'
+import { comoEntero, comoTexto, type Almacen } from './base.ts'
 import { DatosInvalidos, INSTANTE } from './clientes.ts'
 
 const PERIODO = /^\d{4}-\d{2}$/
@@ -84,6 +85,68 @@ export function deudasImportadas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO
 	const filas = almacen.db.prepare('SELECT deuda_id FROM factura WHERE proveedor_id = ?')
 		.all(proveedorId) as Array<Record<string, unknown>>
 	return new Set(filas.map(fila => String(fila.deuda_id)))
+}
+
+/**
+ * Las facturas que la corrida de pagadas tiene que revisar contra el libro del administrador,
+ * en orden estable (contrato, periodo, cuota) para que la corrida sea reproducible.
+ */
+export function facturasAbiertas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaAbierta[] {
+	return facturasPorEstado(almacen, 'abierta', proveedorId)
+}
+
+/** Las que Cobrix ya tenía pagadas: la corrida las explica como `ya_pagada` sin preguntar nada. */
+export function facturasPagadas(almacen: Almacen, proveedorId = PROVEEDOR_UNICO): readonly FacturaAbierta[] {
+	return facturasPorEstado(almacen, 'pagada', proveedorId)
+}
+
+function facturasPorEstado(almacen: Almacen, estado: 'abierta' | 'pagada', proveedorId: number): readonly FacturaAbierta[] {
+	const filas = almacen.db.prepare(`
+		SELECT id, deuda_id, contrato_id, periodo, total, saldo FROM factura
+		WHERE proveedor_id = ? AND estado = ?
+		ORDER BY contrato_id, periodo, deuda_id`).all(proveedorId, estado) as Array<Record<string, unknown>>
+	return filas.map(fila => ({
+		facturaId: comoEntero(fila.id),
+		deudaId: comoTexto(fila.deuda_id),
+		contratoId: comoEntero(fila.contrato_id),
+		periodo: comoTexto(fila.periodo),
+		total: comoEntero(fila.total),
+		saldo: comoEntero(fila.saldo),
+	}))
+}
+
+export interface CobroDeFactura {
+	/** La fecha en que el ISP cobró, no la de hoy: sale de la factura del administrador. */
+	readonly pagadaEl: string
+	readonly ispFacturaId: number
+	readonly ispFacturaNum: string
+	readonly corridaPago: number
+}
+
+/**
+ * Marca la factura pagada y le deja el rastro de quién la cobró. Solo actúa sobre una factura
+ * ABIERTA: si otra corrida se adelantó, devuelve `false` y no la toca dos veces. El saldo pasa a
+ * 0 porque ya no hay nada que cobrar.
+ */
+export function marcarPagada(almacen: Almacen, facturaId: number, cobro: CobroDeFactura): boolean {
+	const problemas: string[] = []
+	if (!Number.isInteger(facturaId) || facturaId <= 0) problemas.push(`«${String(facturaId)}» no es un número de factura de Cobrix.`)
+	if (!FECHA.test(cobro.pagadaEl)) problemas.push(`La fecha de pago «${cobro.pagadaEl}» no tiene la forma AAAA-MM-DD.`)
+	if (!Number.isInteger(cobro.ispFacturaId) || cobro.ispFacturaId <= 0) {
+		problemas.push('Una factura pagada necesita la factura del administrador que la cobró.')
+	}
+	if (cobro.ispFacturaNum.trim() === '') problemas.push('Falta el número de la factura del administrador que cobró.')
+	if (!Number.isInteger(cobro.corridaPago) || cobro.corridaPago <= 0) {
+		problemas.push('Una factura se marca pagada dentro de una corrida: falta su identificador.')
+	}
+	if (problemas.length > 0) throw new DatosInvalidos(problemas)
+
+	const resultado = almacen.db.prepare(`
+		UPDATE factura SET estado = 'pagada', saldo = 0, pagada_el = ?, isp_factura_id = ?, isp_factura_num = ?, corrida_pago = ?
+		WHERE id = ? AND estado = 'abierta'`).run(
+		cobro.pagadaEl, cobro.ispFacturaId, cobro.ispFacturaNum, cobro.corridaPago, facturaId,
+	)
+	return comoEntero(resultado.changes) > 0
 }
 
 export interface TotalesCartera {

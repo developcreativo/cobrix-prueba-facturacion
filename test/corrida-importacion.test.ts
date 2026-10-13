@@ -617,9 +617,28 @@ describe('datos frescos del contrato (lo que autoriza a refrescar)', () => {
 		assert.equal(clasificar(cuotasDe(['2026-09'], { identificacionBruta: 'ABC' })).frescos, null)
 		assert.equal(clasificar(cuotasDe(['2026-09'], { monedaSigla: 'VES' })).frescos, null)
 		assert.equal(clasificar(cuotasDe(['2026-09'], { deuda: 5, precioServicio: 2500 })).frescos, null)
-		assert.equal(clasificar([filaContrato({ deudaId: '0', deuda: 0 })]).frescos, null,
-			'sin cuotas pendientes el flujo no llega a juzgar la moneda: no se refresca lo que no se verificó')
 		assert.equal(clasificarContrato(900101, ilegible('cuota_duplicada', 'deuda_id duplicado'), CONTEXTO).frescos, null)
+	})
+
+	it('un contrato AL DÍA («deuda_id 0») también los ofrece: es el que acaba de pagar todo', () => {
+		const alDia = clasificar([filaContrato({ deudaId: '0', deuda: 0 })])
+		assert.deepEqual(alDia.lineas.map(linea => linea.resultado), ['sin_deuda'], 'sigue sin producir cuotas')
+		assert.equal(alDia.candidatas.length, 0)
+		assert.ok(alDia.frescos, 'si no, el cliente que paga todo se congela con los datos del día que debía')
+		assert.equal(alDia.frescos.cliente.id, 'V12345678')
+		assert.equal(alDia.frescos.contrato.estado, 'ACTIVO')
+
+		// Pero solo si pasa lo que se puede comprobar sin cuotas.
+		const sinCuotas = (cambios: Partial<FilaContrato>) => clasificar([filaContrato({ deudaId: '0', deuda: 0, ...cambios })]).frescos
+		assert.equal(sinCuotas({ estado: 'RETIRADO' }), null)
+		assert.equal(sinCuotas({ estado: 'LO_QUE_SEA' }), null)
+		assert.equal(sinCuotas({ identificacionBruta: 'ABC' }), null)
+		assert.equal(clasificarContrato(900101, legible([filaContrato({ deudaId: '0', deuda: 0, identificacionBruta: 'J-40123456-7' })]), {
+			...CONTEXTO, configuracion: { ...CONTEXTO.configuracion, excluirTiposDocumento: ['J'] },
+		}).frescos, null, 'un tipo de documento excluido tampoco se pone al día')
+		// La moneda no se evalúa aquí: sin cuotas no hay con qué comparar el precio del plan, y
+		// ofrecerlos es inofensivo porque refrescar nunca inserta.
+		assert.ok(sinCuotas({ monedaSigla: 'VES' }), 'sin cuotas la coherencia de moneda no se puede juzgar')
 	})
 })
 
