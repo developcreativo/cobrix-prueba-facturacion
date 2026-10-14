@@ -4,7 +4,7 @@ Integración que importa clientes y facturas desde el administrador de facturas 
 de internet, aplica los pagos que el ISP ya cobró, y un panel para operarla.
 
 Entrega de la prueba técnica de Cobrix. El enunciado original está en
-[`docs/ENUNCIADO.md`](docs/ENUNCIADO.md); las decisiones, en [`docs/NOTA.md`](docs/NOTA.md).
+[`docs/ENUNCIADO.md`](docs/ENUNCIADO.md). Las decisiones, en [`docs/NOTA.md`](docs/NOTA.md).
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ npm start
 
 Requiere **Node 24 o superior**. La primera vez, `npm start` **compila el panel**: instala sus
 dependencias (unos 420 paquetes) y lo construye, lo que tarda unos segundos con la caché de npm
-caliente y bastante más en una máquina sin ella. Si no puede —por ejemplo, sin red— no se cae: la
+caliente y bastante más en una máquina sin ella. Si no puede, por ejemplo sin red, no se cae: la
 API sigue en pie y el panel responde 503 diciendo el comando exacto que falta
 (`npm --prefix web install && npm --prefix web run build`).
 
@@ -43,17 +43,17 @@ Cobrix arranca vacío a propósito: lo primero que verás son estados vacíos qu
    20 clientes, 21 contratos, 42 facturas abiertas y USD 1.235,00 por cobrar.
 5. Abre la corrida en el historial y **despliega cualquier cuota**: ahí está la traza de las
    reglas que se evaluaron y por qué terminó donde terminó. Es el punto diferencial de esta
-   entrega; está explicado en la nota.
+   entrega y está explicado en la nota.
 
    Donde mejor se ve es en las cuotas que **no** se importaron. Filtra por «Moneda incoherente» y
-   despliega la de JORGE CASTILLO —reporta USD con cuotas que son el 0,3 % de su plan—, o por
+   despliega la de JORGE CASTILLO, que reporta USD con cuotas que son el 0,3 % de su plan, o por
    «Excluida por estado» y mira una de CARLOS ROJAS. La traza dice qué regla la descartó, con qué
    números, y cuáles ya no se evaluaron.
 
-### Tres números de contratos, y los tres son correctos
+### Por qué el panel dice 21 contratos, el administrador 27 y una corrida de pagadas 19
 
 El panel muestra **21 contratos espejados «de 27 leídos»**, y una corrida de pagadas puede decir
-que consultó 19. No es una discrepancia:
+que consultó 19. Cada número cuenta una cosa distinta:
 
 - **27** son todos los contratos que el administrador publica.
 - **21** son los que Cobrix guarda: los de los 20 clientes que sí se importaron. Los otros seis
@@ -80,13 +80,13 @@ contrato o `{"id_contrato": 900103, "monto": 25}` para un abono parcial. Despué
 >   npm start
 > ```
 >
-> Cambiar solo el puerto no aísla nada: lo que aísla es `BILLING_API_DB`.
+> Cambiar solo el puerto no aísla nada. El aislamiento lo da `BILLING_API_DB`.
 > Para volver al estado de fábrica: `git restore data/billing-api.sqlite`.
 
 ## Pruebas
 
 ```bash
-npm test          # 249 pruebas
+npm test          # 252 pruebas
 npm run typecheck
 ```
 

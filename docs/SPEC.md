@@ -8,12 +8,12 @@
 
 Supuestos que asumo y que cambian el resultado si son incorrectos (corregir aquí antes de implementar):
 
-1. **Los valores por defecto de la configuración son los que reproducen los criterios de aceptación**: estados importables `ACTIVO` + `CORTADO`, **sin** ventana de importación, **sin** máximo de cuotas recientes, **sin** topes por corrida, **sin** exclusión por tipo de documento y **0 días de gracia**. Cualquier otro default rompe los 42/20/USD 1.235,00 (p. ej. una ventana de 3 meses deja fuera 4 cuotas de MIGUEL ANGEL SOTO; excluir `J` elimina a COMERCIAL EL FARO).
+1. **Los valores por defecto de la configuración son los que reproducen los criterios de aceptación**: estados importables `ACTIVO` + `CORTADO`, **sin** ventana de importación, **sin** máximo de cuotas recientes, **sin** topes por corrida, **sin** exclusión por tipo de documento y **0 días de gracia**. Cualquier otro default rompe los 42/20/USD 1.235,00 (p. ej. una ventana de 3 meses deja fuera 4 cuotas de MIGUEL ANGEL SOTO, y excluir `J` elimina a COMERCIAL EL FARO).
 2. **Un solo proveedor** configurado (el enunciado habla de «el proveedor» en singular). El modelo de datos lleva `proveedor_id` para no bloquear el multi-ISP, pero la UI gestiona uno.
 3. **Toda la plata es USD**. No hay conversión de moneda: un contrato que no reporte USD coherente se descarta, no se convierte.
 4. **`src/billing-api/**` y `data/billing-api.sqlite` son inmutables.** La integración solo habla HTTP. Esto es una restricción del enunciado y además un criterio de evaluación (robustez).
 5. La **corrida automática** se implementa como planificador in-process (el proceso del panel ya es de larga vida). No se asume cron del sistema ni contenedor externo.
-6. El panel es **single-tenant, de red local, sin login**. No se construye autenticación de operadores (no está pedida); sí se protege la contraseña del proveedor en reposo.
+6. El panel es **single-tenant, de red local, sin login**. No se construye autenticación de operadores, que no está pedida. La contraseña del proveedor sí se protege en reposo.
 
 Fuera de alcance explícito: multi-ISP en UI, autenticación de usuarios del panel, webhooks del ISP, conciliación contable, exportación a sistemas externos.
 
@@ -40,7 +40,7 @@ Fuera de alcance explícito: multi-ISP en UI, autenticación de usuarios del pan
 
 ### 1.2 Módulo: Importación de clientes y facturas (§3.2, §4)
 
-Con Cobrix vacío, configuración por defecto y `SANDBOX_TODAY=2026-10-13` — **verificado contra la base entregada**:
+Con Cobrix vacío, configuración por defecto y `SANDBOX_TODAY=2026-10-13`, **verificado contra la base entregada**:
 
 | Escenario | Esperado |
 | --- | --- |
@@ -53,7 +53,7 @@ Con Cobrix vacío, configuración por defecto y `SANDBOX_TODAY=2026-10-13` — *
 | COMERCIAL EL FARO (`J-40123456-7`) | `cliente_id = J401234567`, tipo **jurídica** |
 | No deben existir como clientes | CARLOS ROJAS (cortesía), ROSA DIAZ (retirado), PEDRO LEON (rechazado), ANDRES VARGAS (anulado), LAURA MENDEZ (sin deuda), JORGE CASTILLO (moneda incoherente) |
 
-> **Hallazgo que condiciona la implementación — el orden de las reglas no es libre.**
+> **El orden de las reglas condiciona la implementación.**
 > SOFIA TORRES tiene una cuota con saldo `0,001317` sobre un plan de USD 25. `contrato/individual` la publica como `deuda: 0` (redondea a 2 decimales). Si la coherencia de moneda se evalúa **antes** de descartar el saldo residual, esa cuota mide `0 % < 1 %` del precio del plan y el contrato entero se descarta por moneda: salen *2* contratos por moneda y *0* residuales, y la corrida pierde las otras cuotas legítimas de SOFIA.
 > El orden correcto, que reproduce `1 moneda incoherente` + `1 residual`, es: **(1)** descartar `deuda_id: "0"`, **(2)** descartar cuotas con `deuda` redondeada `< 0,01`, **(3)** evaluar coherencia de moneda a nivel de **contrato** sobre las cuotas que sobreviven (`max(deuda) < 1 % de precio_servicio` → contrato fuera).
 > Verificado: con este orden la base entregada da exactamente `42 / USD 1.235,00 / 20 clientes / 9 estado / 1 moneda / 1 residual`.
@@ -75,7 +75,7 @@ Pagos creados en la caja del ISP (`/__sim/pagar`, `/__sim/anular`) después de i
 Casos negativos obligatorios:
 
 - **Exonerada** (VALENTINA PAZ, `descuento = -tarifa`, saldo 0, `valor_pago` 0) → `exonerada`, nunca pagada.
-- **Cuota fantasma** (ANA PEREZ, periodo `2025-08`, visible solo en `pago_informacion`) → ignorada; no crea factura ni línea de pago.
+- **Cuota fantasma** (ANA PEREZ, periodo `2025-08`, visible solo en `pago_informacion`) → ignorada, no crea factura ni línea de pago.
 - **Cuota del mes en curso ausente del libro** → `abierta_sin_cobro`, **no** `sin_evidencia`, confirmando contra `contrato/individual` (§3.5).
 - **Filas contradictorias** para un mismo `id_cuota` (saldos distintos entre facturas enlazadas) → `inconsistente`, factura intacta.
 
@@ -120,7 +120,7 @@ Totales (clientes, contratos, abiertas, pagadas, monto por cobrar), proveedor co
 | --- | --- | --- |
 | Runtime | **Node 24 + TypeScript 5.9** con `strict` + `noUncheckedIndexedAccess` (el `tsconfig.json` entregado) | Ya es el contrato del repo; los tipos estrictos son la primera defensa contra «adivinar» una respuesta de la API. |
 | Dominio / sincronización | **TypeScript sin dependencias**, funciones puras | El 35 % de la nota es clasificación correcta. Reglas puras = tests de tabla rápidos, deterministas y sin HTTP. |
-| Persistencia Cobrix | **`node:sqlite`** (built-in) en `data/cobrix.sqlite` | Cero dependencias, transaccional, `UNIQUE` para idempotencia. Un ORM aquí es peso sin beneficio. |
+| Persistencia Cobrix | **`node:sqlite`** (built-in) en `data/cobrix.sqlite` | Cero dependencias, transaccional, `UNIQUE` para idempotencia. Un ORM añadiría peso sin resolver nada nuevo. |
 | HTTP del panel | **`node:http` + router propio** (≈80 líneas) o **Hono** si se quiere middleware | API JSON pequeña y estable (12 endpoints). Hono es la alternativa razonable si se prefiere ergonomía a cero-deps. |
 | Frontend | **Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui** (Radix) + TanStack Query + React Router | Pedido explícitamente; shadcn da tablas, diálogos y formularios accesibles sin «look de IA». Radix resuelve foco y teclado, que son parte de la aceptación. |
 | Tablas | **TanStack Table** (headless) | Orden, filtro y paginación sobre 42–200 filas sin reinventarlo. |
@@ -130,7 +130,7 @@ Totales (clientes, contratos, abiertas, pagadas, monto por cobrar), proveedor co
 
 ### 2.2 Cómo se levanta (contrato de un comando)
 
-`npm start` sigue levantando **todo** (API simulada + panel). El panel sirve el build estático de Vite desde `web/dist`; si no existe, lo construye. `npm run dev` levanta Vite con HMR y proxy `/api` al backend.
+`npm start` sigue levantando **todo** (API simulada + panel). El panel sirve el build estático de Vite desde `web/dist`. Si no existe, lo construye. `npm run dev` levanta Vite con HMR y proxy `/api` al backend.
 
 ```
 npm install
@@ -142,7 +142,7 @@ npm run typecheck
 
 ### 2.3 Plan B (si el tiempo aprieta)
 
-Mantener el panel renderizado en servidor sobre `src/web/layout.ts` + Tailwind compilado a un CSS estático, con islas de JS mínimas. Pierde algo de interactividad y gana un día. **Decisión:** se toma el stack de 2.1 porque UX/UI vale 20 % y el enunciado lo invita; el Plan B queda documentado como salida de emergencia, no como entrega.
+Mantener el panel renderizado en servidor sobre `src/web/layout.ts` + Tailwind compilado a un CSS estático, con islas de JS mínimas. Pierde algo de interactividad y gana un día. **Decisión:** se toma el stack de 2.1 porque UX/UI vale 20 % y el enunciado lo invita. El Plan B queda documentado como salida de emergencia, no como entrega.
 
 ---
 
@@ -168,7 +168,7 @@ src/cobrix/
 web/              Vite + React + Tailwind + shadcn/ui
 ```
 
-Regla de oro: **`domain/` no importa nada de `api/` ni de `store/`**. Entra data ya parseada, sale una decisión. Es lo que permite testear las 20+ reglas sin servidor.
+**`domain/` no importa nada de `api/` ni de `store/`.** Recibe datos ya parseados y devuelve una decisión, que es lo que permite testear las 20+ reglas sin servidor.
 
 ### 3.2 Cliente HTTP: las rarezas de la API, resueltas de una vez
 
@@ -320,15 +320,15 @@ El caso ELENA RUIZ (pagar y anular) cae en (f): el libro vuelve a mostrar `saldo
 
 ### 3.6 Idempotencia
 
-Tres capas, no una:
+Se apoya en tres capas:
 
-1. **Estructural:** `UNIQUE (proveedor_id, deuda_id)` en `factura`; `cliente.id` es la identificación normalizada.
+1. **Estructural:** `UNIQUE (proveedor_id, deuda_id)` en `factura`, y `cliente.id` es la identificación normalizada.
 2. **Lógica:** la clasificación devuelve `ya_importada` / `ya_pagada` antes de intentar escribir.
 3. **Verificada:** un test corre importar → importar y asserta `0` nuevas, 42 `ya_importada` y un hash de la tabla `factura` idéntico.
 
 ### 3.7 Concurrencia y corrida automática
 
-Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impide dos corridas reales simultáneas; el panel deshabilita los botones y la API responde `409 corrida_en_curso`. El planificador compara cada minuto `HH:MM` en `America/Caracas` con la hora configurada, registra la última fecha ejecutada y encadena importación → pagadas. Si hay una corrida en curso a su hora, se registra `omitida` con el motivo.
+Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impide dos corridas reales simultáneas. El panel deshabilita los botones y la API responde `409 corrida_en_curso`. El planificador compara cada minuto `HH:MM` en `America/Caracas` con la hora configurada, registra la última fecha ejecutada y encadena importación → pagadas. Si hay una corrida en curso a su hora, se registra `omitida` con el motivo.
 
 ### 3.8 API JSON del panel
 
@@ -347,31 +347,30 @@ Un **lock de corrida** en SQLite (fila única con el `corrida_id` en curso) impi
 
 Errores siempre con la misma forma: `{ error: { codigo, mensaje, endpoint, status, sugerencia } }`, con `codigo` estable.
 
-> **Corregido el 2026-10-13, al implementar.** Esta línea decía `{ codigo, mensaje, detalle?, endpoint? }` y dejaba que la UI eligiera la sugerencia a partir del `codigo`. El código real (`ErrorApi` en `src/cobrix/api/cliente.ts` y `ErrorCorrida` en `src/cobrix/almacen/corridas.ts`) ya redacta la **`sugerencia`** —«Revisa el usuario y la contraseña en Configuración → Proveedor»— y conserva el `status` HTTP. Que el panel reimplantara esa redacción habría puesto el «cómo seguir» del §3.7 en dos sitios, condenados a divergir. Manda el código: el panel muestra la sugerencia del backend tal cual. No revertir.
+> **Corregido el 2026-10-13, al implementar.** Esta línea decía `{ codigo, mensaje, detalle?, endpoint? }` y dejaba que la UI eligiera la sugerencia a partir del `codigo`. El código real (`ErrorApi` en `src/cobrix/api/cliente.ts` y `ErrorCorrida` en `src/cobrix/almacen/corridas.ts`) ya redacta la **`sugerencia`** («Revisa el usuario y la contraseña en Configuración → Proveedor») y conserva el `status` HTTP. Que el panel reimplantara esa redacción habría puesto el «cómo seguir» del §3.7 en dos sitios, condenados a divergir. El panel muestra la sugerencia del backend tal cual. No revertir.
 
 > **Corregido el 2026-10-13, al implementar.** Esta spec planeaba **Zod** para validar el borde
 > HTTP. No se usó: el proyecto llegó a la capa HTTP con cero dependencias de producción y
 > `dominio/configuracion.ts` ya tenía `validarEmpresa` y `validarProveedor`, que devuelven la lista
 > de problemas legibles que el panel pinta. Añadir una dependencia para repetir esa validación
-> habría sido pagar peso por nada. Si algún día entra una, que sea para algo que el dominio no
-> sepa hacer.
+> habría sido peso de más.
 
 Los instantes viajan en ISO **con desfase explícito** (`2026-10-13T14:03:11-04:00`). El almacén guarda hora civil de Caracas sin zona, y es la capa HTTP la que añade el desfase: enviarla cruda desplazaría el historial varias horas según la máquina que lo mire.
 
 #### Decisiones del contrato, tomadas el 2026-10-13
 
 Al construir el panel contra datos de ejemplo aparecieron campos que la interfaz prometía y el
-almacén no podía servir. Cada uno se resolvió en una de tres direcciones, y se anotan aquí para
-que no se vuelvan a discutir ni se «arreglen» de vuelta.
+almacén no podía servir. Se anotan aquí para que no se vuelvan a discutir ni se «arreglen» de
+vuelta.
 
-**Se añaden tres columnas, porque el dato existe y se estaba tirando.**
+**Columnas nuevas, porque el dato existe y se estaba tirando.**
 
 | Columna | Por qué |
 | --- | --- |
-| `corrida_linea.titular_nombre` y `.titular_identificacion` | El detalle de una corrida es el acta de lo que el ISP dijo en ese momento. Para las líneas de contratos que **no** se importaron no hay cliente en Cobrix, así que sin esto la pantalla muestra «900122 · 7000112 · Excluida por estado», que a un cobrador no le dice nada. El nombre lo tenemos en la mano al clasificar; tirarlo y luego intentar recuperarlo con un JOIN es imposible por construcción. |
-| `cliente.identificacion_bruta` | §3.5 y §3.6 muestran «documento». Guardamos la identificación normalizada como clave, que es correcto, pero mostrar `V12345678` cuando el ISP publica `V-12345678` es una pequeña mentira en una pantalla cuyo trabajo es reflejar al ISP. |
+| `corrida_linea.titular_nombre` y `.titular_identificacion` | El detalle de una corrida es el acta de lo que el ISP dijo en ese momento. Para las líneas de contratos que **no** se importaron no hay cliente en Cobrix, así que sin esto la pantalla muestra «900122 · 7000112 · Excluida por estado», sin nombre ni documento. El nombre lo tenemos en la mano al clasificar; tirarlo y luego intentar recuperarlo con un JOIN es imposible por construcción. |
+| `cliente.identificacion_bruta` | §3.5 y §3.6 muestran «documento». Guardamos la identificación normalizada como clave, que es correcto, pero mostrar `V12345678` cuando el ISP publica `V-12345678` contradice a una pantalla cuyo trabajo es reflejar al ISP. |
 
-**Se calculan en la capa HTTP, sin tocar el esquema.** `duracion_ms` (de `inicio` y `fin`), el
+**Calculado en la capa HTTP, sin tocar el esquema.** `duracion_ms` (de `inicio` y `fin`), el
 número de factura de Cobrix (`FAC-000042`, formateado a partir de `factura.id`), el `titulo` de
 cada evento (del `tipo`), `proxima_ejecucion` (de `auto_hora` y la fecha del sandbox),
 `ultima_ejecucion` (la última corrida con `disparo = 'automatica'`), `sandbox.hoy` y
@@ -383,13 +382,12 @@ propagar la excepción.
 **Se retiran del panel, porque nadie los pidió.** La dirección del contrato, la zona horaria y la
 moneda como campos de empresa (son constantes: `America/Caracas` y USD, en un solo sitio),
 `proveedor.actualizado_en`, y la `descripcion` por línea, que duplicaba el `motivo` que la línea
-ya guarda. Añadir columnas para datos que el enunciado no pide es exactamente la clase de
-complejidad que luego nadie sabe por qué existe.
+ya guarda. Añadir columnas para datos que el enunciado no pide solo deja trabajo de mantenimiento.
 
-**Se construye de verdad:** el progreso en vivo (§5.3). Las dos corridas aceptan un
+**Construido de verdad:** el progreso en vivo (§5.3). Las dos corridas aceptan un
 `alProgresar?: (evento: ProgresoCorrida) => void`, la capa HTTP lo convierte en SSE y el panel
-deja de simularlo con un temporizador. Es el único de los nueve que cuesta trabajo real, y es el
-que el enunciado §7 invita explícitamente a hacer.
+deja de simularlo con un temporizador. Cuesta trabajo real, y el enunciado §7 invita
+explícitamente a hacerlo.
 
 ### 3.9 Plan de pruebas
 
@@ -454,7 +452,7 @@ Qué agregué que no se pidió, qué problema del operador resuelve y dónde ver
 3–5 ítems priorizados, con el costo estimado de cada uno.
 ```
 
-Dos reglas para que la nota sume en lugar de restar: **nada de afirmaciones no verificadas** (si dice «idempotente», hay un test que lo prueba) y **el apartado 3 es el que más se lee** — una corrección concreta y bien explicada vale más que diez líneas de proceso.
+**Nada de afirmaciones no verificadas**: si dice «idempotente», hay un test que lo prueba. Y el apartado 3 es el que más se lee, así que conviene gastarlo en una corrección concreta y bien explicada.
 
 ---
 
@@ -464,7 +462,7 @@ Dos reglas para que la nota sume en lugar de restar: **nada de afirmaciones no v
 
 Una funcionalidad está lista cuando: `npm test` y `npm run typecheck` pasan; los criterios de §1 se cumplen con la base entregada; la pantalla funciona a 360 px y con teclado; los errores tienen mensaje accionable; y hay una línea en el README o en la nota si la decisión no es obvia.
 
-### 5.2 Punto diferencial principal — «Explicador de decisiones»
+### 5.2 Punto diferencial principal: «Explicador de decisiones»
 
 Cada línea de corrida guarda, además del resultado, la **traza de reglas evaluadas** en orden con su veredicto. En el detalle de la corrida, cualquier cuota se despliega así:
 
@@ -476,11 +474,11 @@ Cuota 7000041 · SOFIA TORRES · 2026-09 · deuda 0,00
   ·  coherencia de moneda: no evaluada (cuota ya descartada)
 ```
 
-Por qué es el diferencial correcto para esta prueba: el 35 % de la nota es «cada respuesta se interpreta bien», y esto convierte la clasificación en algo **auditable por el operador y por el siguiente dev**, no en una caja negra. Cuesta poco (la traza se produce donde ya se decide) y hace de documentación viva de las reglas de §4.
+El 35 % de la nota es «cada respuesta se interpreta bien», y esto deja la clasificación **auditable por el operador y por el siguiente dev**. Cuesta poco, porque la traza se produce donde ya se decide, y sirve de documentación viva de las reglas de §4.
 
-### 5.3 Punto diferencial secundario — consola de corrida en vivo
+### 5.3 Punto diferencial secundario: consola de corrida en vivo
 
-`GET /api/corridas/:id/stream` (SSE) emite `contrato_iniciado`, `cuota_clasificada` y `corrida_cerrada`. El panel muestra barra de progreso, contadores que suben y las últimas decisiones scrolleando, con `aria-live="polite"`. Una corrida de 27 contratos deja de ser un spinner. Degrada a *polling* si el navegador corta el stream.
+`GET /api/corridas/:id/stream` (SSE) emite `contrato_iniciado`, `cuota_clasificada` y `corrida_cerrada`. El panel muestra barra de progreso, contadores que suben y las últimas decisiones scrolleando, con `aria-live="polite"`. El operador ve avanzar la corrida contrato a contrato, los 27. Degrada a *polling* si el navegador corta el stream.
 
 ### 5.4 Ideas adicionales, por relación valor/costo
 
@@ -494,12 +492,12 @@ Por qué es el diferencial correcto para esta prueba: el 35 % de la nota es «ca
 | **Reloj del sandbox visible** (`SANDBOX_TODAY`) en el pie | Evita la confusión de «¿por qué esta cuota es del futuro?» | trivial |
 | Docker + `docker compose up` | Despliegue de un comando | medio |
 
-Recomendación: entregar 5.2 + 5.3 + `npm run demo` + reloj del sandbox. Es el conjunto que más nota mueve por hora invertida; el resto queda listado en «qué haría con más tiempo».
+Recomendación: entregar 5.2 + 5.3 + `npm run demo` + reloj del sandbox. Es lo que más sube la nota por hora invertida. El resto queda listado en «qué haría con más tiempo».
 
 ### 5.5 Seguridad y robustez mínimas
 
-- Contraseña del proveedor cifrada (AES-256-GCM, clave en `COBRIX_SECRET`, generada al primer arranque si no existe); nunca en logs, nunca en respuestas, nunca en el snapshot de configuración.
-- Validación de todo input en el borde HTTP con los validadores de `dominio/configuracion.ts`; sin `any` en el dominio.
+- Contraseña del proveedor cifrada (AES-256-GCM, clave en `COBRIX_SECRET`, generada al primer arranque si no existe). No aparece en los logs, ni en las respuestas, ni en el snapshot de configuración.
+- Validación de todo input en el borde HTTP con los validadores de `dominio/configuracion.ts`, y sin `any` en el dominio.
 - Sin SQL concatenado: solo `prepare` con parámetros.
-- Logs JSON con `corrida_id`; los cuerpos de la API se registran truncados y sin credenciales.
+- Logs JSON con `corrida_id`. Los cuerpos de la API se registran truncados y sin credenciales.
 - Timeouts y concurrencia acotados: la integración no puede tumbar al ISP ni colgarse indefinidamente.
