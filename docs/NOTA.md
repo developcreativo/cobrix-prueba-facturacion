@@ -9,7 +9,7 @@ producción**, persistencia en `node:sqlite`. El panel, en Vite + React + Tailwi
 
 Los criterios de aceptación de §5 se cumplen y están probados: **20 clientes, 42 facturas
 abiertas por USD 1.235,00**, segunda corrida sin novedades, y tras los cinco cobros del
-enunciado, **8 pagadas y 34 abiertas por USD 955,00**. 249 pruebas automáticas.
+enunciado, **8 pagadas y 34 abiertas por USD 955,00**. 252 pruebas automáticas.
 
 ## 2. Cómo usé la IA
 

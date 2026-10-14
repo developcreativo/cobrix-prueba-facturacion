@@ -86,7 +86,7 @@ contrato o `{"id_contrato": 900103, "monto": 25}` para un abono parcial. Despué
 ## Pruebas
 
 ```bash
-npm test          # 249 pruebas
+npm test          # 252 pruebas
 npm run typecheck
 ```
 
