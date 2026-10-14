@@ -31,7 +31,7 @@ almacen/     persistencia (node:sqlite)
 corridas/    orquestación (conecta api/ + dominio/ + almacen/)
   importacion   la corrida de importación, real y simulada
   pagadas       la corrida de actualización de pagadas, real y simulada
-  progreso      eventos en vivo de una corrida; si nadie escucha, no cuesta nada
+  progreso      eventos en vivo de una corrida, solo mientras alguien escuche
 
 http/        la API JSON del panel y el servidor que lo sirve
   api           los endpoints de /api, con un solo formato de error
@@ -46,7 +46,7 @@ apoyo/
   limite        recorrido con concurrencia acotada, en orden y abortable
 ```
 
-Regla de capas: **`dominio/` no importa nada de `api/` ni de `almacen/`**. Por eso las reglas de
+**`dominio/` no importa nada de `api/` ni de `almacen/`**, y por eso las reglas de
 ENUNCIADO.md §4 se prueban en tablas, sin servidor ni base.
 
 ## Dónde está cada regla
@@ -69,9 +69,9 @@ ENUNCIADO.md §4 se prueban en tablas, sin servidor ni base.
 | La ventana del libro (hasta el último día del periodo actual) y el desempate del mes en curso | `corridas/pagadas.ts` |
 | Rarezas de la API (`estado`, `success: false`, filas sin orden, cuotas futuras) | `api/cliente.ts` + `api/lectura.ts` |
 
-**El orden de evaluación de las reglas de importación no es libre**: está documentado en la
-cabecera de `dominio/importacion.ts` y fijado por la prueba «descarta el saldo residual ANTES de
-juzgar la moneda».
+**El orden de evaluación de las reglas de importación es parte de la especificación.** Está
+documentado en la cabecera de `dominio/importacion.ts` y lo fija la prueba «descarta el saldo
+residual ANTES de juzgar la moneda».
 
 ## Pruebas
 
@@ -81,5 +81,5 @@ npm run typecheck
 ```
 
 El panel (React + Tailwind + shadcn/ui) vive en `web/` y se sirve compilado desde
-`http/servidor.ts`; el esqueleto entregado en `src/web/` ya no se usa (ENUNCIADO.md §3.7
-autoriza reemplazarlo).
+`http/servidor.ts`. El esqueleto entregado en `src/web/` ya no se usa, y ENUNCIADO.md §3.7
+autoriza reemplazarlo.

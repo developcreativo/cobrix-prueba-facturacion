@@ -3,8 +3,8 @@
 Interfaz del panel: Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui (Radix + cva),
 con React Router. Es un proyecto autocontenido, con su propio `package.json`.
 
-Las seis pantallas —resumen, configuración, sincronización, detalle de corrida, clientes y
-expediente— consumen la **API del panel** (`/api/*`, `src/cobrix/http/api.ts`, SPEC §3.8). Todo lo
+Las seis pantallas (resumen, configuración, sincronización, detalle de corrida, clientes y
+expediente) consumen la **API del panel** (`/api/*`, `src/cobrix/http/api.ts`, SPEC §3.8). Todo lo
 que se ve sale de ahí: el panel no guarda datos propios ni rellena huecos.
 
 ## Cómo levantarlo
@@ -34,8 +34,8 @@ npm run typecheck
 npm run lint
 ```
 
-La primera vez Cobrix está vacío a propósito, y el panel lo dice en vez de enseñar tablas vacías.
-Para llenarlo: en **Configuración**, URL `http://127.0.0.1:4310/api/v1`, usuario `cobrix`,
+La primera vez Cobrix está vacío a propósito, y el panel lo anuncia con un estado vacío que
+explica qué hacer. Para llenarlo: en **Configuración**, URL `http://127.0.0.1:4310/api/v1`, usuario `cobrix`,
 contraseña `cobrix-sandbox`, «Probar conexión» y, en **Sincronización**, «Importar». Quedan 20
 clientes y 42 facturas abiertas por USD 1.235,00.
 
@@ -55,7 +55,7 @@ clientes y 42 facturas abiertas por USD 1.235,00.
 - **Una sola puerta a la red.** Ninguna pantalla hace `fetch`: todo pasa por `src/datos/api.ts`,
   que devuelve las respuestas sin transformarlas.
 - **Los errores los redacta el backend.** Llegan como
-  `{ error: { codigo, mensaje, sugerencia, endpoint, status } }` y se muestran tal cual; el panel
+  `{ error: { codigo, mensaje, sugerencia, endpoint, status } }` y se muestran tal cual. El panel
   solo añade, cuando el código tiene un destino claro, el enlace a la pantalla que lo arregla.
 - **Formato en un solo sitio.** Montos `USD 1.235,00`, fechas `13 oct 2026`, periodos `oct 2026`:
   todo sale de `src/lib/formato.ts`. Los montos llegan en centavos enteros y los instantes con
@@ -71,10 +71,10 @@ clientes y 42 facturas abiertas por USD 1.235,00.
 
 Se alcanzan con datos reales, sin interruptores en la URL:
 
-- **vacío** — Cobrix recién instalado, o después de «Borrar datos importados».
-- **error** — para el servidor del panel (`Ctrl-C` en `npm start`) y recarga: sale el bloque con
+- **vacío**: Cobrix recién instalado, o después de «Borrar datos importados».
+- **error**: para el servidor del panel (`Ctrl-C` en `npm start`) y recarga. Sale el bloque con
   el mensaje, la sugerencia y el código, más «Reintentar».
-- **cargando** — los skeletons se ven en la primera carga; para mirarlos con calma, limita la red
+- **cargando**: los skeletons se ven en la primera carga. Para mirarlos con calma, limita la red
   en las herramientas del navegador.
 
 ## El progreso en vivo
@@ -83,4 +83,5 @@ Lanzar una corrida (`POST /api/corridas`) devuelve su id en cuanto existe, y con
 `GET /api/corridas/:id/stream`: la consola muestra la barra, los contadores subiendo y las últimas
 decisiones, con `aria-live` para quien no mire la pantalla. Al cerrarse la corrida se relee su
 detalle para quedarse con el resumen definitivo. Si el navegador corta el stream, el panel pasa a
-consultar el detalle cada pocos segundos y lo dice, en vez de dejar la barra congelada.
+consultar el detalle cada pocos segundos y lo dice en pantalla, así que la barra no se queda
+congelada.
